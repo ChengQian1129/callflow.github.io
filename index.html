@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>我的静态首页</title>
+  <style>
+    /* Reset 一点默认样式 */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif; line-height: 1.6; color: #333; }
+    a { text-decoration: none; color: inherit; }
+
+    /* 顶部导航 */
+    header {
+      background: #fff;
+      border-bottom: 1px solid #eee;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem;
+    }
+    .nav ul { list-style: none; display: flex; gap: 1rem; }
+    .nav li { transition: color 0.2s; }
+    .nav li:hover { color: #0084ff; }
+
+    /* Hero */
+    .hero {
+      background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%);
+      color: #fff;
+      text-align: center;
+      padding: 100px 20px;
+    }
+    .hero h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .hero p { font-size: 1.2rem; opacity: 0.9; }
+
+    /* 卡片区 */
+    .cards {
+      max-width: 960px;
+      margin: 60px auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.5rem;
+      padding: 0 20px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      padding: 30px 20px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.10);
+    }
+    .card h3 { margin-bottom: 0.6rem; font-size: 1.2rem; }
+    .card p { font-size: 0.9rem; color: #555; }
+
+    /* 页脚 */
+    footer {
+      text-align: center;
+      padding: 40px 20px;
+      background: #fafafa;
+      color: #777;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header>
+    <nav class="nav">
+      <strong>MySite</strong>
+      <ul>
+        <li><a href="#home">首页</a></li>
+        <li><a href="#projects">作品</a></li>
+        <li><a href="#about">关于</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <!-- Hero 区域 -->
+  <section class="hero" id="home">
+    <h1>欢迎来到我的页面集</h1>
+    <p>所有手写 HTML Demo 一网打尽</p>
+  </section>
+
+  <!-- 卡片分类 -->
+  <section class="cards" id="projects">
+    <a class="card" href="pages/animation.html">
+      <h3>CSS 动画集合</h3>
+      <p>一些酷炫的纯 CSS 动画示例。</p>
+    </a>
+    <a class="card" href="pages/canvas.html">
+      <h3>Canvas 作品</h3>
+      <p>基于 HTML5 Canvas 的图形与交互。</p>
+    </a>
+    <a class="card" href="pages/webgl.html">
+      <h3>WebGL Demo</h3>
+      <p>3D 场景与着色器实验室。</p>
+    </a>
+    <a class="card" href="pages/mini-game.html">
+      <h3>小游戏</h3>
+      <p>几款浏览器小游戏打发时间。</p>
+    </a>
+  </section>
+
+  <!-- 页脚 -->
+  <footer>
+    © 2024 MySite. Built with ❤ using GitHub Pages.
+  </footer>
+</body>
+</html>
