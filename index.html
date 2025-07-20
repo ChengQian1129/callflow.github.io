@@ -1,120 +1,134 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>我的静态首页</title>
+  <title>5G Core Signaling Flows</title>
   <style>
-    /* Reset 一点默认样式 */
+    /* --- Reset & base typography --- */
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif; line-height: 1.6; color: #333; }
-    a { text-decoration: none; color: inherit; }
+    body { font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background:#f5f7fb; color:#333; line-height:1.6; }
+    a { text-decoration:none; color:inherit; }
 
-    /* 顶部导航 */
-    header {
-      background: #fff;
-      border-bottom: 1px solid #eee;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .nav {
-      max-width: 960px;
-      margin: 0 auto;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 1rem;
-    }
-    .nav ul { list-style: none; display: flex; gap: 1rem; }
-    .nav li { transition: color 0.2s; }
-    .nav li:hover { color: #0084ff; }
+    /* --- Navigation bar --- */
+    header { background:#fff; border-bottom:1px solid #e6e9ef; position:sticky; top:0; z-index:100; }
+    .nav { max-width:1100px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; padding:1rem 1.2rem; }
+    .nav ul { list-style:none; display:flex; gap:1rem; }
+    .nav li:hover { color:#0072ff; cursor:pointer; }
 
-    /* Hero */
-    .hero {
-      background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%);
-      color: #fff;
-      text-align: center;
-      padding: 100px 20px;
-    }
-    .hero h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
-    .hero p { font-size: 1.2rem; opacity: 0.9; }
+    /* --- Hero banner --- */
+    .hero { background:linear-gradient(135deg,#89f7fe 0%,#66a6ff 100%); color:#fff; text-align:center; padding:90px 20px; }
+    .hero h1 { font-size:2.4rem; margin-bottom:0.6rem; }
+    .hero p { font-size:1.15rem; opacity:0.92; }
 
-    /* 卡片区 */
-    .cards {
-      max-width: 960px;
-      margin: 60px auto;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 1.5rem;
-      padding: 0 20px;
-    }
-    .card {
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-      padding: 30px 20px;
-      transition: transform 0.2s, box-shadow 0.2s;
-    }
-    .card:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 8px 20px rgba(0,0,0,0.10);
-    }
-    .card h3 { margin-bottom: 0.6rem; font-size: 1.2rem; }
-    .card p { font-size: 0.9rem; color: #555; }
+    /* --- Card grid --- */
+    .cards { max-width:1100px; margin:60px auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1.7rem; padding:0 20px; }
+    .card { background:#fff; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.05); padding:26px 22px; transition:transform 0.18s, box-shadow 0.18s; }
+    .card:hover { transform:translateY(-4px); box-shadow:0 10px 24px rgba(0,0,0,0.10); }
+    .card h3 { margin-bottom:0.55rem; font-size:1.15rem; color:#0072ff; }
+    .card p { font-size:0.88rem; color:#555; }
 
-    /* 页脚 */
-    footer {
-      text-align: center;
-      padding: 40px 20px;
-      background: #fafafa;
-      color: #777;
-      font-size: 0.85rem;
-    }
+    /* --- Footer --- */
+    footer { text-align:center; padding:45px 20px; background:#fff; color:#777; font-size:0.85rem; border-top:1px solid #e6e9ef; }
   </style>
 </head>
 <body>
-  <!-- 顶部导航 -->
+  <!-- Navigation -->
   <header>
     <nav class="nav">
-      <strong>MySite</strong>
+      <strong>5GC Flow Gallery</strong>
       <ul>
-        <li><a href="#home">首页</a></li>
-        <li><a href="#projects">作品</a></li>
-        <li><a href="#about">关于</a></li>
+        <li><a href="#flows">Flows</a></li>
+        <li><a href="https://www.3gpp.org" target="_blank">3GPP</a></li>
+        <li><a href="#about">About</a></li>
       </ul>
     </nav>
   </header>
 
-  <!-- Hero 区域 -->
-  <section class="hero" id="home">
-    <h1>欢迎来到我的页面集</h1>
-    <p>所有手写 HTML Demo 一网打尽</p>
+  <!-- Hero section -->
+  <section class="hero" id="top">
+    <h1>5G Core Signaling Flow Catalog</h1>
+    <p>Quick-reference diagrams for engineers and learners, mapped to 3GPP specs.</p>
   </section>
 
-  <!-- 卡片分类 -->
-  <section class="cards" id="projects">
-    <a class="card" href="pages/animation.html">
-      <h3>CSS 动画集合</h3>
-      <p>一些酷炫的纯 CSS 动画示例。</p>
+  <!-- Card grid with deep links -->
+  <section class="cards" id="flows">
+    <!-- Access & Mobility Management -->
+    <a class="card" href="flows/ue-registration.html">
+      <h3>UE Registration</h3>
+      <p>Initial Registration (23.502 §4.2.2)</p>
     </a>
-    <a class="card" href="pages/canvas.html">
-      <h3>Canvas 作品</h3>
-      <p>基于 HTML5 Canvas 的图形与交互。</p>
+    <a class="card" href="flows/service-request.html">
+      <h3>Service Request</h3>
+      <p>CM-IDLE → CM-CONNECTED (23.502 §4.2.3)</p>
     </a>
-    <a class="card" href="pages/webgl.html">
-      <h3>WebGL Demo</h3>
-      <p>3D 场景与着色器实验室。</p>
+    <a class="card" href="flows/ue-deregistration.html">
+      <h3>UE Deregistration</h3>
+      <p>Explicit/Implicit release (23.502 §4.2.5)</p>
     </a>
-    <a class="card" href="pages/mini-game.html">
-      <h3>小游戏</h3>
-      <p>几款浏览器小游戏打发时间。</p>
+    <a class="card" href="flows/paging.html">
+      <h3>Network Paging</h3>
+      <p>Downlink data / NAS signalling (23.502 §4.2.3.3)</p>
+    </a>
+
+    <!-- Session Management -->
+    <a class="card" href="flows/pdu-session-establish.html">
+      <h3>PDU Session Establishment</h3>
+      <p>IPv4/IPv6, Ethernet, Unstructured (23.502 §4.3.2)</p>
+    </a>
+    <a class="card" href="flows/pdu-session-modify.html">
+      <h3>PDU Session Modification</h3>
+      <p>QoS, SSC-mode, 5QI update (23.502 §4.3.3)</p>
+    </a>
+    <a class="card" href="flows/pdu-session-release.html">
+      <h3>PDU Session Release</h3>
+      <p>UE or Network initiated (23.502 §4.3.4)</p>
+    </a>
+
+    <!-- Mobility & Handover -->
+    <a class="card" href="flows/inter-ngran-handover.html">
+      <h3>Inter-gNodeB Handover</h3>
+      <p>NG-RAN to NG-RAN, Xn / N2 (23.502 §4.9.1)</p>
+    </a>
+    <a class="card" href="flows/ngran-epc-handover.html">
+      <h3>EPS ↔ 5GS Handover</h3>
+      <p>LTE/NR mobility (23.502 §4.11)</p>
+    </a>
+
+    <!-- Policy & Charging -->
+    <a class="card" href="flows/pcc-policy-control.html">
+      <h3>Policy Control</h3>
+      <p>PCF – SMF – UPF interactions (23.503 §6)</p>
+    </a>
+    <a class="card" href="flows/offline-charging.html">
+      <h3>Offline Charging</h3>
+      <p>CHF mediation (32.255, 32.295)</p>
+    </a>
+
+    <!-- Network Slice / Exposure -->
+    <a class="card" href="flows/network-slice-selection.html">
+      <h3>Network Slice Selection</h3>
+      <p>NSSF assisted AMF selection (23.502 §5.15)</p>
+    </a>
+    <a class="card" href="flows/nef-exposure.html">
+      <h3>Service Exposure (NEF)</h3>
+      <p>External API invocation (23.502 §5.12)</p>
+    </a>
+
+    <!-- Security & Authentication -->
+    <a class="card" href="flows/primary-authentication.html">
+      <h3>Primary Authentication</h3>
+      <p>AUSF – UDM – SEAF (33.501 §6.1)</p>
+    </a>
+    <a class="card" href="flows/redirection-attack-protection.html">
+      <h3>NAS Security Mode</h3>
+      <p>Integrity & ciphering set-up (24.501)</p>
     </a>
   </section>
 
-  <!-- 页脚 -->
-  <footer>
-    © 2024 MySite. Built with ❤ using GitHub Pages.
+  <!-- Simple About Footer -->
+  <footer id="about">
+    © 2024 5G Core Flow Gallery – Compiled from 3GPP specifications TS 23.502, 24.501, 33.501 and related docs.
   </footer>
 </body>
 </html>
