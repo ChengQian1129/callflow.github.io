@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>5GC 信令流程图 - 可调布局 (支持缩放/平移)</title>
+  <style>
+    /* ===== 基础布局 ===== */
+    html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    #container{display:flex;height:100vh;overflow:hidden;}
+
+    /* ===== 左侧信令图容器 =====
+       修复：去掉原先的 cursor:grab; 以免在左侧空白区域出现“小手掌”指针 */
+    #diagram-container{flex:1;position:relative;overflow:hidden;}
+
+    #header-names{position:absolute;top:0;left:0;right:0;height:50px;background:#fff;border-bottom:1px solid #eee;overflow:hidden;pointer-events:none;}
+    #header-names-inner{position:absolute;top:0;left:0;height:100%;}
+    #header-names-inner .node-name{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:14px;color:#333;}
+    #diagram-body{position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;}
+    #diagram{display:block;}
+
+    /* ===== 垂直分隔条 ===== */
+    #vertical-divider{width:5px;background:#ddd;cursor:col-resize;user-select:none;}
+
+    /* ===== 右侧面板 ===== */
+    #viewer-wrapper{width:400px;display:flex;flex-direction:column;overflow:hidden;}
+    #viewer-header{flex:none;padding:10px 12px;background:#f5f5f5;border-bottom:1px solid #ccc;font-weight:bold;}
+
+    /* ===== 右侧上下分区父容器 ===== */
+    #right-detail{position:relative;flex:1;min-height:0;}
+
+    /* ===== 右侧上下内容区 ===== */
+    #json-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #comment-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #json-viewer details{margin-left:12px;margin-bottom:4px;}
+    #json-viewer summary{cursor:pointer;}
+
+    /* ===== 水平分隔条 ===== */
+    #horizontal-divider{
+      position:absolute;left:0;right:0;height:5px;background:#ddd;
+      cursor:row-resize;user-select:none;
+    }
+
+    /* ===== 信令文字标签 ===== */
+    .message-label{cursor:default;}
+    .message-label:hover{fill:#007ACC;}
+
+    #comment-content {
+      max-width: 800px;
+      margin: 0 auto;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    #comment-content code {
+      font-family: Consolas,"Courier New",monospace;
+      background-color: #f5f5f5;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    #comment-content pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+    #comment-content pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+    #comment-content ul, #comment-content ol {
+      margin: 0.5em 0;
+      padding-left: 1.5em;
+    }
+    #comment-content li {
+      margin: 0.2em 0;
+    }
+    #comment-viewer::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #comment-viewer::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+    #comment-viewer::-webkit-scrollbar-track {
+      background-color: #f5f5f5;
+    }
+  </style>
+
+  <style id="addon-style">
+    .message-label.selected{fill:#ff5722;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <!-- 左侧信令图 -->
+    <div id="diagram-container">
+      <div id="header-names"><div id="header-names-inner"></div></div>
+      <div id="diagram-body"><svg id="diagram"></svg></div>
+    </div>
+
+    <!-- 垂直分隔条 -->
+    <div id="vertical-divider"></div>
+
+    <!-- 右侧消息详情 -->
+    <div id="viewer-wrapper">
+      <div id="viewer-header">消息详情</div>
+      <div id="right-detail">
+        <div id="json-viewer">请点击左侧消息查看详情</div>
+        <div id="horizontal-divider"></div>
+        <div id="comment-viewer">
+           <div id="comment-content">请点击左侧消息查看注释</div>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/16.1.1/lib/marked.umd.min.js"></script>
+  <script>
+      document.addEventListener('DOMContentLoaded', () => {
+      /* ====== 数据 ====== */
+const nodes = ["UE", "gNB", "AMF", "PCF", "SMF", "UPF", "UDM"];
+const messages = [
+    {from: "UDM", to: "AMF", label: "1  Nudm_UEContextManagement_DeregistrationNotification Request", info: {
+            http: {method: "POST", uri: "/namf-comm/v1/{ueId}/dereg-notify"},
+            body: {
+                "deregistrationReason [Mandatory]": "SUBSCRIPTION_WITHDRAWN",
+                "accessType [Mandatory]": "3GPP"
+            }
+        }, comment: "The UDM initiates deregistration of the UE by notifying the serving AMF that the UE’s registration should be removed. The request is sent to the callback URI (provided earlier by the AMF) and includes the target access and a reason for deregistration. \n- **deregistrationReason** [Mandatory]: *Subscription Withdrawn*. This indicates the operator (UDM) has requested immediate removal of the UE’s registration and sessions (e.g., the UE’s subscription is terminated or no longer valid).\n- **accessType** [Mandatory]: *3GPP*. Specifies that the deregistration applies to the 3GPP access for this UE (i.e., the UE’s NR access)."
+    },
+    {from: "AMF", to: "gNB", label: "2  DownlinkNASTransport (Deregistration Request)", info: {
+            header: {msg: "DownlinkNASTransport", protocol: "NGAP"},
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 101,
+                "nasPdu [Mandatory]": {
+                    "messageType": "Deregistration Request",
+                    "deregistrationType [Mandatory]": "5GS only, re-registration not required",
+                    "accessType [Mandatory]": "3GPP"
+                }
+            }
+        }, comment: "Upon receiving the UDM’s notification, the AMF initiates a network-triggered deregistration towards the UE. It sends a **Deregistration Request** NAS message to the UE via the gNB using a Downlink NAS Transport. This NAS message instructs the UE that the network is deregistering it. \n- **amfUeNgapId** [Mandatory]: The AMF’s UE NGAP ID for this UE’s context, identifying the UE on the AMF side.\n- **ranUeNgapId** [Mandatory]: The gNB’s UE NGAP ID for the UE, identifying the UE on the RAN side.\n- **nasPdu** [Mandatory]: The NAS payload carrying the Deregistration Request for the UE.\n  - **messageType** [Mandatory]: *Deregistration Request* (network-initiated NAS message) indicating the network’s request to deregister the UE.\n  - **deregistrationType** [Mandatory]: Specifies the type of deregistration. Here it indicates a deregistration for 5GS access only and that the UE is **not** required to re-register afterward (the network is removing the UE, not asking for re-registration).\n  - **accessType** [Mandatory]: *3GPP*, indicating the deregistration procedure applies to 3GPP access (NR radio access in this case)."
+    },
+    {from: "AMF", to: "UDM", label: "3  Nudm_UEContextManagement_DeregistrationNotification Response", info: {
+            status: 204
+        }, comment: "The AMF acknowledges the UDM’s deregistration notification. A **204 No Content** HTTP response is returned, indicating the AMF has successfully received the request and will proceed with deregistration. *(No response body is needed, as the status code alone signals success.)*"
+    },
+    {from: "AMF", to: "UDM", label: "4  Nudm_SubscriberDataManagement_Unsubscribe Request", info: {
+            http: {method: "DELETE", uri: "/nudm-sdm/v1/{supi}/context-data-subscriptions/{subscriptionId}"}
+        }, comment: "Since the UE is being deregistered (and will have no active context left), the AMF unsubscribes from any subscription data change notifications for that UE. The AMF sends a **Subscriber Data Management Unsubscribe** request to UDM, using the subscription reference it had obtained earlier (if the AMF had subscribed to the UE’s data updates). This stops the UDM from sending any further subscription-data change notifications related to this UE to the AMF. \n- **subscriptionId** [Mandatory]: Identifier of the previously established UDM subscription for data-change notifications that the AMF now wishes to cancel (this ID was provided when the AMF initially subscribed for updates)."
+    },
+    {from: "UDM", to: "AMF", label: "5  Nudm_SubscriberDataManagement_Unsubscribe Response", info: {
+            status: 204
+        }, comment: "UDM confirms that the AMF’s unsubscription request has been processed. A **204 No Content** response indicates the AMF is successfully unsubscribed from further data-change notifications for the UE. *(The UDM will no longer send subscription data update notifications to the AMF for this UE.)*"
+    },
+    {from: "AMF", to: "SMF", label: "6  Nsmf_PDUSession_ReleaseSMContext Request", info: {
+            http: {method: "DELETE", uri: "/nsmf-pdusession/v1/{supi}/sm-contexts/{pduSessionId}"}
+        }, comment: "The AMF instructs the SMF to release the UE’s PDU session(s) for the deregistering UE. For each active PDU session, the AMF sends an **Nsmf_PDUSession_ReleaseSMContext Request** to the serving SMF, identifying the session to terminate. \n- **supi** [Mandatory]: The subscriber’s identifier (SUPI) for the UE whose PDU session is to be released.\n- **pduSessionId** [Mandatory]: The ID of the PDU Session that should be released. This identifies the specific session (for a given SUPI) that the SMF needs to tear down."
+    },
+    {from: "SMF", to: "UPF", label: "7  N4 Session Release Request", info: {
+            header: {msg: "PFCP SessionDeletionRequest", protocol: "PFCP"},
+            payload: {
+                "pFCPSessionID [Mandatory]": 17
+            }
+        }, comment: "The SMF initiates the release of user-plane resources associated with the PDU session. It sends an **N4 Session Release Request** (a PFCP Session Deletion Request) to the UPF that is handling the PDU session. This request instructs the UPF to tear down the PDU session’s user plane tunnels and context. \n- **pFCPSessionID** [Mandatory]: Identifier of the PFCP session (user-plane session) to be deleted on the UPF. This ID corresponds to the PDU session’s context in the UPF, enabling the UPF to locate and remove all resources (tunnels, buffers, etc.) associated with that session."
+    },
+    {from: "UPF", to: "SMF", label: "8  N4 Session Release Response", info: {
+            header: {msg: "PFCP SessionDeletionResponse", protocol: "PFCP"},
+            payload: {
+                "cause [Mandatory]": "Request accepted"
+            }
+        }, comment: "The UPF confirms that it has released the user-plane resources for the session. It responds with an **N4 Session Release Response** (PFCP Session Deletion Response) to the SMF. \n- **cause** [Mandatory]: *Request accepted*. Indicates the UPF successfully deleted the PFCP session and all associated resources for the PDU session (the UPF has dropped any remaining packets and freed the tunnels/bearers for this session)."
+    },
+    {from: "SMF", to: "AMF", label: "9  Nsmf_PDUSession_ReleaseSMContext Response", info: {
+            status: 204
+        }, comment: "The SMF notifies the AMF that the PDU session context has been released. It returns an **Nsmf_PDUSession_ReleaseSMContext Response** with success (HTTP 204 No Content) to the AMF. This confirms that the SMF has torn down the PDU session and there are no user-plane resources remaining for that session."
+    },
+    {from: "SMF", to: "UDM", label: "10  Nudm_SubscriberDataManagement_Unsubscribe Request", info: {
+            http: {method: "DELETE", uri: "/nudm-sdm/v1/{supi}/SM-data-subscriptions/{subscriptionId}"}
+        }, comment: "If the released PDU session was the last one the SMF was managing for this UE (for a given DNN and slice), the SMF unsubscribes from any session-management data change notifications at the UDM. The SMF sends a **SDM Unsubscribe** request to UDM to cancel its subscription for session data updates related to this UE (e.g., it will no longer receive notifications for subscription changes for that DNN/S-NSSAI). \n- **subscriptionId** [Mandatory]: Identifier of the SMF’s subscription to session management data updates for this UE (and specific data set), which the SMF now deletes to stop receiving further notifications."
+    },
+    {from: "UDM", to: "SMF", label: "11  Nudm_SubscriberDataManagement_Unsubscribe Response", info: {
+            status: 204
+        }, comment: "UDM confirms that the SMF’s unsubscription request is completed. A **204 No Content** response is returned to the SMF, indicating that the SMF will no longer receive session-related subscription data change notifications for the UE."
+    },
+    {from: "SMF", to: "UDM", label: "12  Nudm_UEContextManagement_Deregistration Request", info: {
+            http: {method: "DELETE", uri: "/nudm-uecm/v1/{ueId}/registrations/smf-3gpp-access/{pduSessionId}"}
+        }, comment: "The SMF informs the UDM to remove the stored SMF registration for the PDU session. It invokes the **Nudm_UEContextManagement_Deregistration** service to deregister the SMF’s association with the UE’s subscription. This tells the UDM to delete the record tying this SMF to the UE’s PDU session. \n- **dnn** [Mandatory]: The Data Network Name of the PDU session that was released (identifying the data network the session was for). \n- **pduSessionId** [Mandatory]: The identifier of the PDU session that has been terminated. These parameters allow the UDM to locate and remove the entry linking the SMF to the UE’s session (so that the UDM no longer considers the UE to have an active session with this SMF on that DNN)."
+    },
+    {from: "UDM", to: "SMF", label: "13  Nudm_UEContextManagement_Deregistration Response", info: {
+            status: 204
+        }, comment: "UDM confirms that it removed the SMF’s registration information for the UE’s PDU session. A **204 No Content** response indicates the UDM has successfully deleted the association of the SMF (for the given DNN and PDU session) from the UE’s context. The UDM no longer retains any active session record for this SMF and UE."
+    },
+    {from: "AMF", to: "PCF", label: "14  Npcf_AMPolicyControl_Delete Request", info: {
+            http: {method: "DELETE", uri: "/npcf-am-policy-control/v1/am-policy/{polAssoId}"}
+        }, comment: "The AMF initiates termination of the UE’s Access and Mobility policy association at the PCF. Since the UE is deregistered from the network (and no longer has an active registration), the AMF sends an **AM Policy Delete** request to the PCF. This ends the AM policy for the UE. \n- **polAssoId** [Mandatory]: The identifier of the AM Policy Association for this UE at the PCF. This ID was originally assigned when the UE’s AM policy was established; using it here tells the PCF which policy association to delete."
+    },
+    {from: "PCF", to: "AMF", label: "15  Npcf_AMPolicyControl_Delete Response", info: {
+            status: 204
+        }, comment: "The PCF acknowledges the deletion of the UE’s Access and Mobility policy. It returns a **204 No Content** response to indicate the AM policy association for the UE has been successfully removed. The UE no longer has any active AM policy at the PCF."
+    },
+    {from: "AMF", to: "PCF", label: "16  Npcf_UEPolicyControl_Delete Request", info: {
+            http: {method: "DELETE", uri: "/npcf-ue-policy-control/v1/ue-policies/{uePolAssoId}"}
+        }, comment: "The AMF also tears down the UE-specific policy association at the PCF. If the UE had any UE Policy (such as URSP rules or other device-specific policies provided by the PCF), the AMF will trigger their removal now that the UE is deregistered. It sends a **UE Policy Control Delete** request to the PCF to delete the UE’s policy association. \n- **uePolAssoId** [Mandatory]: Identifier of the UE Policy Association to be deleted at the PCF. This ID corresponds to the UE’s policy session that was established previously (e.g., for providing user-specific policies); the PCF will use it to identify and remove that policy record."
+    },
+    {from: "PCF", to: "AMF", label: "17  Npcf_UEPolicyControl_Delete Response", info: {
+            status: 204
+        }, comment: "The PCF confirms that the UE’s policy association has been deleted. A **204 No Content** response is returned to the AMF, indicating that any UE-specific policies for this subscriber have been cleared from the PCF. At this point, both the AM policy and UE policy for the UE at the PCF are terminated."
+    },
+    {from: "gNB", to: "AMF", label: "18  UplinkNASTransport (Deregistration Accept)", info: {
+            header: {msg: "UplinkNASTransport", protocol: "NGAP"},
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 101,
+                "nasPdu [Mandatory]": {
+                    "messageType": "Deregistration Accept"
+                },
+                "userLocationInformation [Mandatory]": {
+                    "nrCgi [Optional]": {
+                        "plmnId": "001/01",
+                        "nRCellID": "0xABCDE1234"
+                    },
+                    "tai [Mandatory]": {
+                        "plmnId": "001/01",
+                        "tac": "000B"
+                    }
+                }
+            }
+        }, comment: "The UE responds to the network-initiated deregistration. After receiving the Deregistration Request, the UE sends a **Deregistration Accept** NAS message, which the gNB forwards to the AMF via an Uplink NAS Transport. This indicates that the UE has acknowledged the deregistration. \n- **amfUeNgapId** [Mandatory]: The AMF’s identifier for the UE’s context, matching the IDs in the earlier Downlink NAS Transport (so the AMF knows which UE this Accept corresponds to).\n- **ranUeNgapId** [Mandatory]: The gNB’s identifier for the UE, again matching the existing UE context at the gNB.\n- **nasPdu** [Mandatory]: The NAS payload containing the UE’s Deregistration Accept.\n  - **messageType** [Mandatory]: *Deregistration Accept*. This NAS message confirms that the UE has accepted the deregistration and is aware that it is now deregistered from the 5G network.\n- **userLocationInformation** [Mandatory]: The UE’s location information included by the gNB when forwarding the NAS message.\n  - **nrCgi** [Optional]: The NR Cell Global Identity of the cell the UE is currently in. It includes the serving PLMN (001/01) and the specific NR Cell ID (here shown as 0xABCDE1234) identifying the cell. (Present since the UE is on NR access.)\n  - **tai** [Mandatory]: The Tracking Area Identity corresponding to the UE’s location. It consists of the PLMN (001/01) and TAC (here 0x000B). This confirms the tracking area from which the UE’s Deregistration Accept was sent."
+    },
+    {from: "AMF", to: "gNB", label: "19  UEContextReleaseCommand", info: {
+            header: {msg: "UEContextReleaseCommand", protocol: "NGAP"},
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 101,
+                "cause [Mandatory]": "Deregistration"
+            }
+        }, comment: "With the deregistration acknowledged, the AMF directs the RAN to release the UE’s signaling connection and context. The AMF sends a **UE Context Release Command** to the gNB, instructing it to free the NG-RAN resources for this UE. \n- **amfUeNgapId** [Mandatory]: The AMF’s UE NGAP ID, identifying the UE whose context should be released.\n- **ranUeNgapId** [Mandatory]: The gNB’s UE NGAP ID for the same UE. Together with the AMF UE ID, this pinpoints the exact UE context to release.\n- **cause** [Mandatory]: *Deregistration*. This NGAP release cause indicates that the release is due to the UE’s deregistration. The gNB interprets this cause as an instruction to remove the UE’s context because the UE is now deregistered from the core network."
+    },
+    {from: "gNB", to: "UE", label: "20  RRCRelease", info: {
+            header: {msg: "RRCRelease", protocol: "RRC"},
+            payload: {
+                "releaseCause [Optional]": "normal"
+            }
+        }, comment: "The gNB releases the radio connection to the UE. It issues an **RRC Release** message over the air to the UE, ending the RRC session. This moves the UE to RRC idle mode and completes the disconnection. \n- **releaseCause** [Optional]: *normal*. Indicates a normal release of the RRC connection (in this case triggered by the network for deregistration). This implies there are no errors; the connection is being released as expected (the deregistration procedure has completed)."
+    },
+    {from: "gNB", to: "AMF", label: "21  UEContextReleaseComplete", info: {
+            header: {msg: "UEContextReleaseComplete", protocol: "NGAP"},
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 101
+            }
+        }, comment: "Finally, the gNB confirms that it has released the UE’s context. It sends a **UE Context Release Complete** message to the AMF. This lets the AMF know that the UE’s context in the RAN has been successfully torn down and all radio resources for the UE have been released. \n- **amfUeNgapId** [Mandatory]: The AMF UE identifier for the now-released context (same ID as in the Release Command, confirming which UE context was released).\n- **ranUeNgapId** [Mandatory]: The gNB’s UE identifier for that context, reiterating the UE that was released. With this, the deregistration and context release procedure is fully completed."
+    }
+];
+
+
+
+      /* ====== 页面元素 ====== */
+      const headerInner=document.getElementById('header-names-inner');
+      const bodyDiv=document.getElementById('diagram-body');
+      const svg=document.getElementById('diagram');
+      const diagramContainer=document.getElementById('diagram-container');
+      const verticalDivider=document.getElementById('vertical-divider');
+      const viewerWrapper=document.getElementById('viewer-wrapper');
+
+      const rightDetail=document.getElementById('right-detail');
+      const jsonViewer=document.getElementById('json-viewer');
+      const commentViewer=document.getElementById('comment-viewer');
+      const commentContent=document.getElementById('comment-content');
+      const hDivider=document.getElementById('horizontal-divider');
+
+      /* ====== 绘制信令图 ====== */
+      const headerHeight=50;
+      const margin={top:headerHeight,bottom:50,left:100,right:100};
+      const xStep=200,msgSpacing=80;
+      const totalHeight=margin.top+msgSpacing*(messages.length+1)+margin.bottom;
+      const totalWidth=margin.left+xStep*(nodes.length-1)+margin.right;
+      svg.setAttribute('width',totalWidth);
+      svg.setAttribute('height',totalHeight);
+      headerInner.style.width=totalWidth+'px';
+
+      /* X 坐标 */
+      const xs={};
+      nodes.forEach((n,i)=>{
+        const x=margin.left+i*xStep;
+        xs[n]=x;
+        const d=document.createElement('div');
+        d.className='node-name';
+        d.textContent=n;
+        d.style.left=x+'px';
+        headerInner.appendChild(d);
+        const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1',x);line.setAttribute('y1',margin.top);
+        line.setAttribute('x2',x);line.setAttribute('y2',totalHeight-margin.bottom);
+        line.setAttribute('stroke','#aaa');line.setAttribute('stroke-dasharray','4 2');
+        svg.appendChild(line);
+      });
+
+      /* 箭头 marker */
+      const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+      const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+      marker.setAttribute('id','arrow');marker.setAttribute('markerWidth','8');marker.setAttribute('markerHeight','8');
+      marker.setAttribute('refX','6');marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M0,0 L0,6 L6,3 Z');path.setAttribute('fill','#000');
+      marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+
+      /* 渲染消息线条和标签 */
+      messages.forEach((m,i)=>{
+        const y=margin.top+msgSpacing*(i+1);
+        const x1=xs[m.from],x2=xs[m.to];
+        const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1',x1);ln.setAttribute('y1',y);
+        ln.setAttribute('x2',x2);ln.setAttribute('y2',y);
+        ln.setAttribute('stroke','#000');ln.setAttribute('marker-end','url(#arrow)');
+        svg.appendChild(ln);
+        const lbl=document.createElementNS('http://www.w3.org/2000/svg','text');
+        lbl.setAttribute('x',(x1+x2)/2);lbl.setAttribute('y',y-6);
+        lbl.setAttribute('text-anchor','middle');lbl.classList.add('message-label');
+        lbl.textContent=m.label;
+        lbl.addEventListener('click',()=>{
+          renderJSON(m.info,jsonViewer);
+          commentContent.innerHTML=marked.parse(m.comment);
+        });
+        svg.appendChild(lbl);
+      });
+
+      /* ====== JSON 渲染函数 ====== */
+      function renderJSON(obj,container){
+        container.innerHTML='';
+        function walk(k,v,parent){
+          if(v&&typeof v==='object'){
+            const d=document.createElement('details');d.open=true;
+            const s=document.createElement('summary');s.textContent=k;d.appendChild(s);
+            for(const kk in v)walk(kk,v[kk],d);
+            parent.appendChild(d);
+          }else{
+            const div=document.createElement('div');
+            div.textContent=k+': '+v;parent.appendChild(div);
+          }
+        }
+        for(const key in obj)walk(key,obj[key],container);
+      }
+
+      
+      /* ====== 同步水平滚动，保持节点标题与竖线对齐 ===== */
+      bodyDiv.addEventListener('scroll', () => {
+        headerInner.style.transform = `translateX(${-bodyDiv.scrollLeft}px)`;
+      });
+      /* 初始化一次，避免刚加载时错位 */
+      headerInner.style.transform = 'translateX(0px)';
+      /* ====== 右侧面板拖拽 ===== */
+      verticalDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startX=e.clientX,startW=viewerWrapper.offsetWidth;
+        function onMove(ev){viewerWrapper.style.width=(startW-(ev.clientX-startX))+'px';}
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      function initVertical(){const h=rightDetail.clientHeight/2;jsonViewer.style.top='0';jsonViewer.style.height=h+'px';hDivider.style.top=h+'px';commentViewer.style.top=(h+5)+'px';commentViewer.style.height=(h-5)+'px';}
+      initVertical();window.addEventListener('resize',initVertical);
+      hDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startY=e.clientY,startH=jsonViewer.offsetHeight;
+        function onMove(ev){
+          const newH=startH+(ev.clientY-startY);
+          jsonViewer.style.height=newH+'px';hDivider.style.top=newH+'px';
+          commentViewer.style.top=(newH+5)+'px';commentViewer.style.height=(rightDetail.clientHeight-newH-5)+'px';
+        }
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      /* ====== 缩放与平移 ===== */
+      const originalW=totalWidth,originalH=totalHeight;let scale=1;
+      svg.setAttribute('viewBox',`0 0 ${originalW} ${originalH}`);
+
+      /* 拖拽平移（保持功能，不改变指针样式） */
+      let dragging=false,sx=0,sy=0;
+      diagramContainer.addEventListener('mousedown',e=>{
+        dragging=true;sx=e.clientX;sy=e.clientY;e.preventDefault();});
+      document.addEventListener('mousemove',e=>{
+        if(!dragging) return;
+        diagramContainer.scrollLeft-=e.clientX-sx;
+        diagramContainer.scrollTop -=e.clientY-sy;
+        sx=e.clientX;sy=e.clientY;
+      });
+      document.addEventListener('mouseup',()=>{dragging=false;});
+
+      /* 缩放 */
+      diagramContainer.addEventListener('wheel',e=>{
+        if(!e.ctrlKey)return;
+        e.preventDefault();
+        const factor=(Math.abs(e.deltaY)<50)?(e.deltaY<0?1.05:0.95):(e.deltaY<0?1.2:0.8);
+        const newScale=scale*factor;if(newScale<0.1||newScale>10)return;
+        const rect=diagramContainer.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        const contentX=(diagramContainer.scrollLeft+cx)/scale;
+        const contentY=(diagramContainer.scrollTop+cy)/scale;
+        scale=newScale;
+        svg.setAttribute('width',originalW*scale);svg.setAttribute('height',originalH*scale);
+        headerInner.style.width=(originalW*scale)+'px';
+        nodes.forEach((n,i)=>{headerInner.children[i].style.left=((margin.left+i*xStep)*scale)+'px';});
+        diagramContainer.scrollLeft=contentX*scale-cx;
+        diagramContainer.scrollTop =contentY*scale-cy;
+      },{passive:false});
+    });
+  </script>
+
+  <script id="addon-script">
+    document.addEventListener('DOMContentLoaded', function(){
+      const labels = Array.from(document.querySelectorAll('.message-label'));
+      let currentIdx = -1;
+      const select = (idx, viaKey=false) => {
+        if(idx < 0 || idx >= labels.length) return;
+        if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+        currentIdx = idx;
+        const lbl = labels[currentIdx];
+        lbl.classList.add('selected');
+        if(viaKey) {
+          lbl.scrollIntoView({block:'center', inline:'center'});
+        }
+        lbl.dispatchEvent(new Event('click'));
+      };
+      labels.forEach((lbl, idx) => {
+        lbl.addEventListener('click', () => {
+          if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+          currentIdx = idx;
+          lbl.classList.add('selected');
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowDown'){
+          e.preventDefault();
+          select(currentIdx + 1, true);
+        } else if(e.key === 'ArrowUp'){
+          e.preventDefault();
+          select(currentIdx - 1, true);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
