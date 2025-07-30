@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>5GC 信令流程图 - 可调布局 (支持缩放/平移)</title>
+  <style>
+    /* ===== 基础布局 ===== */
+    html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    #container{display:flex;height:100vh;overflow:hidden;}
+
+    /* ===== 左侧信令图容器 =====
+       修复：去掉原先的 cursor:grab; 以免在左侧空白区域出现“小手掌”指针 */
+    #diagram-container{flex:1;position:relative;overflow:hidden;}
+
+    #header-names{position:absolute;top:0;left:0;right:0;height:50px;background:#fff;border-bottom:1px solid #eee;overflow:hidden;pointer-events:none;}
+    #header-names-inner{position:absolute;top:0;left:0;height:100%;}
+    #header-names-inner .node-name{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:14px;color:#333;}
+    #diagram-body{position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;}
+    #diagram{display:block;}
+
+    /* ===== 垂直分隔条 ===== */
+    #vertical-divider{width:5px;background:#ddd;cursor:col-resize;user-select:none;}
+
+    /* ===== 右侧面板 ===== */
+    #viewer-wrapper{width:400px;display:flex;flex-direction:column;overflow:hidden;}
+    #viewer-header{flex:none;padding:10px 12px;background:#f5f5f5;border-bottom:1px solid #ccc;font-weight:bold;}
+
+    /* ===== 右侧上下分区父容器 ===== */
+    #right-detail{position:relative;flex:1;min-height:0;}
+
+    /* ===== 右侧上下内容区 ===== */
+    #json-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #comment-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #json-viewer details{margin-left:12px;margin-bottom:4px;}
+    #json-viewer summary{cursor:pointer;}
+
+    /* ===== 水平分隔条 ===== */
+    #horizontal-divider{
+      position:absolute;left:0;right:0;height:5px;background:#ddd;
+      cursor:row-resize;user-select:none;
+    }
+
+    /* ===== 信令文字标签 ===== */
+    .message-label{cursor:default;}
+    .message-label:hover{fill:#007ACC;}
+
+    #comment-content {
+      max-width: 800px;
+      margin: 0 auto;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    #comment-content code {
+      font-family: Consolas,"Courier New",monospace;
+      background-color: #f5f5f5;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    #comment-content pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+    #comment-content pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+    #comment-content ul, #comment-content ol {
+      margin: 0.5em 0;
+      padding-left: 1.5em;
+    }
+    #comment-content li {
+      margin: 0.2em 0;
+    }
+    #comment-viewer::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #comment-viewer::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+    #comment-viewer::-webkit-scrollbar-track {
+      background-color: #f5f5f5;
+    }
+  </style>
+
+  <style id="addon-style">
+    .message-label.selected{fill:#ff5722;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <!-- 左侧信令图 -->
+    <div id="diagram-container">
+      <div id="header-names"><div id="header-names-inner"></div></div>
+      <div id="diagram-body"><svg id="diagram"></svg></div>
+    </div>
+
+    <!-- 垂直分隔条 -->
+    <div id="vertical-divider"></div>
+
+    <!-- 右侧消息详情 -->
+    <div id="viewer-wrapper">
+      <div id="viewer-header">消息详情</div>
+      <div id="right-detail">
+        <div id="json-viewer">请点击左侧消息查看详情</div>
+        <div id="horizontal-divider"></div>
+        <div id="comment-viewer">
+           <div id="comment-content">请点击左侧消息查看注释</div>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/16.1.1/lib/marked.umd.min.js"></script>
+  <script>
+      document.addEventListener('DOMContentLoaded', () => {
+      /* ====== 数据 ====== */
+const nodes = ["UE","gNB","AMF","SMF","UPF","NRF","AUSF","UDM","UDR","NSSF","PCF","EIR","SMSF","RADIUS","CHF"];
+
+const messages = [
+    { from: "UE", to: "gNB", label: "0  RRCConnectionRequest", info: {
+            header: { msg: "RRCConnectionRequest", protocol: "RRC" },
+            payload: {
+                "ueIdentity [Mandatory]": { fiveG_S_TMSI: "0xABCDEF12" },
+                "establishmentCause [Mandatory]": "mo-Signalling"
+            }
+        }, comment: "TS 38.331 §5.3.3.2 V18.3.0\nUE initiates RRC connection establishment for a periodic registration update (mobile-originated signalling). \n- **ueIdentity** [Mandatory]: Initial UE identity for contention resolution. The UE provides its 5G-S-TMSI (short form of its 5G-GUTI) if available; otherwise a random value is used:contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}. Here, `fiveG_S_TMSI` is given (e.g., 0xABCDEF12) to help identify the UE’s context. \n- **establishmentCause** [Mandatory]: Reason for RRC establishment. “mo-Signalling” indicates the UE initiated the connection for mobile-originated NAS signalling (such as a periodic registration update):contentReference[oaicite:2]{index=2}."
+    },
+    { from: "gNB", to: "UE", label: "1  RRCSetup", info: {
+            header: { msg: "RRCSetup", protocol: "RRC" },
+            payload: {
+                "rrcTransactionIdentifier [Mandatory]": 0,
+                "radioBearerConfig [Mandatory]": {
+                    "srb_ToAddModList [Optional]": [
+                        { "srb_Identity [Mandatory]": 1 }
+                    ]
+                },
+                "masterCellGroup [Mandatory]": {
+                    "cellGroupId [Mandatory]": 0,
+                    "rlc_BearerToAddModList [Optional]": [],
+                    "mac_CellGroupConfig [Optional]": {},
+                    "physicalCellGroupConfig [Optional]": {}
+                }
+            }
+        }, comment: "TS 38.331 §5.3.5 V18.3.0\ngNB accepts the connection, sending RRC Setup to configure the Signalling Radio Bearer and initial parameters:contentReference[oaicite:3]{index=3}:contentReference[oaicite:4]{index=4}. \n- **rrcTransactionIdentifier** [Mandatory]: Transaction identifier for this RRC setup (here 0 for the first transaction). \n- **radioBearerConfig** [Mandatory]: Configuration of radio bearers for the connection:contentReference[oaicite:5]{index=5}. This includes establishing SRB1 (signalling bearer): an SRB with identity 1 is added. \n- **masterCellGroup** [Mandatory]: Configuration of the primary cell group (NR cell group) for the UE:contentReference[oaicite:6]{index=6}. Here, no dedicated RLC bearers are added and default MAC/PHY configurations are assumed (empty optional sub-structures)."
+    },
+    { from: "UE", to: "gNB", label: "2  RRCSetupComplete", info: {
+            header: { msg: "RRCSetupComplete", protocol: "RRC" },
+            payload: {
+                "rrcTransactionIdentifier [Mandatory]": 0,
+                "selectedPLMN_Identity [Mandatory]": "001/01",
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "RegistrationRequest",
+                    "registrationType": "Periodic Registration Update",
+                    "nasKeySetIdentifier": { tsc: "native", value: 0 },
+                    "fiveGMMCapability [Optional]": "0xE0",
+                    "ueSecurityCapability [Mandatory]": {
+                        nrEncryptionAlgorithms: ["NEA0","NEA1","NEA2"],
+                        nrIntegrityAlgorithms: ["NIA1","NIA2","NIA3"],
+                        eutraEncryptionAlgorithms: ["EEA0","EEA1","EEA2"],
+                        eutraIntegrityAlgorithms: ["EIA1","EIA2"]
+                    },
+                    "fiveGSMobileIdentity": {
+                        type: "5G-GUTI",
+                        plmnId: "001/01",
+                        amfRegionId: 1, amfSetId: 1, amfPointer: 1,
+                        tmsi: "0xABCDEF12"
+                    },
+                    "requestedNSSAI [Optional]": []
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0\nUE completes RRC setup and sends the NAS **Registration Request** (with registration type = periodic update) to the network:contentReference[oaicite:7]{index=7}. \n- **rrcTransactionIdentifier** [Mandatory]: Echoes the RRC transaction ID (0) to confirm this transaction. \n- **selectedPLMN_Identity** [Mandatory]: Selected PLMN ID index (e.g., '001/01' for home PLMN). \n- **dedicatedNAS_Message** [Optional]: Contains the NAS Registration Request message for the 5G core. \n   - **messageType** [Mandatory]: *Registration Request* – the NAS message to update 5G registration. \n   - **registrationType** [Mandatory]: *Periodic Registration Update*, indicating this request is due to the periodic timer expiry:contentReference[oaicite:8]{index=8}. The UE is in RM-REGISTERED state and is re-registering to remain reachable. \n   - **nasKeySetIdentifier** [Mandatory]: Identifier of the current NAS security context (TSC `native`, value 0):contentReference[oaicite:9]{index=9}. It indicates which security keys the UE is using. \n   - **fiveGMMCapability** [Optional]: UE’s 5G MM capabilities (here 0xE0) as in its prior registration:contentReference[oaicite:10]{index=10}. (Included if the UE needs to inform the network of any capability updates; otherwise optional.) \n   - **ueSecurityCapability** [Mandatory]: UE-supported encryption and integrity algorithms for NAS and AS security:contentReference[oaicite:11]{index=11}. This reiterates the algorithms (NR and E-UTRA) the UE can support. (Omitted in clear if already known under an active security context, but shown here for completeness.) \n   - **fiveGSMobileIdentity** [Mandatory]: UE’s identity for 5G core. Here the UE provides its current **5G-GUTI** (PLMN 001/01, AMF region 1/set 1/pointer 1, TMSI 0xABCDEF12):contentReference[oaicite:12]{index=12} so that the AMF can retrieve the existing context. \n   - **requestedNSSAI** [Optional]: List of S-NSSAI(s) requested by the UE. (Empty here, as the UE is not requesting any change to its allowed network slices during a periodic update, unlike an initial registration or slice change request.)"
+    },
+    { from: "gNB", to: "AMF", label: "3  InitialUEMessage", info: {
+            header: { msg: "InitialUEMessage", protocol: "NGAP" },
+            payload: {
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "RegistrationRequest",
+                    "registrationType": "Periodic Registration Update",
+                    "nasKeySetIdentifier": { tsc: "native", value: 0 },
+                    "fiveGMMCapability": "0xE0",
+                    "ueSecurityCapability": {
+                        nrEncryptionAlgorithms: ["NEA0","NEA1","NEA2"],
+                        nrIntegrityAlgorithms: ["NIA1","NIA2","NIA3"],
+                        eutraEncryptionAlgorithms: ["EEA0","EEA1","EEA2"],
+                        eutraIntegrityAlgorithms: ["EIA1","EIA2"]
+                    },
+                    "fiveGSMobileIdentity": {
+                        type: "5G-GUTI",
+                        plmnId: "001/01",
+                        amfRegionId: 1, amfSetId: 1, amfPointer: 1,
+                        tmsi: "0xABCDEF12"
+                    },
+                    "requestedNSSAI": []
+                },
+                "userLocationInformation [Mandatory]": { tai: { plmnId: "001/01", tac: "000A" } },
+                "ueContextRequest [Optional]": "not requested",
+                "rrcEstablishmentCause [Mandatory]": "mo-Signalling",
+                "fivegSTmsi [Optional]": "0xABCDEF12",
+                "amfSetId [Optional]": 1
+            }
+        }, comment: "TS 38.413 §8.6.3 V18.3.0\n**Initial UE Message**: gNB forwards the NAS request to the AMF, including initial context info:contentReference[oaicite:13]{index=13}:contentReference[oaicite:14]{index=14}. \n- **ranUeNgapId** [Mandatory]: gNB’s local UE NGAP ID (here 1) to identify the UE over NG interface:contentReference[oaicite:15]{index=15}. \n- **nasPdu** [Mandatory]: NAS PDU containing the UE’s Registration Request (as detailed above) transparently passed to AMF. \n- **userLocationInformation** [Mandatory]: UE’s location, here the Tracking Area Identity (PLMN 001/01, TAC 000A) of the cell:contentReference[oaicite:16]{index=16}. \n- **ueContextRequest** [Optional]: Not requested. (The gNB is *not* asking the AMF to establish a new UE context via NGAP; since this is a periodic update with no user data expected, gNB leaves this blank, indicating no immediate user-plane resource setup is needed.) \n- **rrcEstablishmentCause** [Mandatory]: The RRC cause forwarded to core: “mo-Signalling”, indicating the UE initiated RRC for NAS signalling:contentReference[oaicite:17]{index=17}. \n- **fivegSTmsi** [Optional]: The 5G-S-TMSI (short form of GUTI) provided by the UE (0xABCDEF12):contentReference[oaicite:18]{index=18}. This helps the AMF identify the UE’s context by its TMSI without needing to decrypt the NAS PDU. \n- **amfSetId** [Optional]: The AMF Set ID (1) from the UE’s GUTI:contentReference[oaicite:19]{index=19}, indicating the target AMF group for this UE. Together, fivegSTmsi and amfSetId route the message to the correct AMF that may hold the context."
+    },
+    { from: "AMF", to: "gNB", label: "4  DownlinkNASTransport (IdentityRequest)", info: {
+            header: { msg: "DownlinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "IdentityRequest",
+                    "identityType": "SUCI"
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** AMF initiates an identity check if the UE’s context cannot be found or validated using the provided GUTI:contentReference[oaicite:20]{index=20}. Here, the AMF sends an **Identity Request** asking for the UE’s SUCI (subscriber identity). \n- **amfUeNgapId** [Mandatory]: AMF’s UE NGAP ID assigned to this UE’s context (e.g., 42). \n- **ranUeNgapId** [Mandatory]: gNB’s UE NGAP ID (echoing ID 1). These IDs pair the messages to the existing UE context over NGAP. \n- **nasPdu** [Mandatory]: The NAS payload, which is an *Identity Request* message. \n   - **messageType** [Mandatory]: *Identity Request*, indicating a request for UE identity. \n   - **identityType** [Mandatory]: The identity sought by AMF – here **SUCI** (Subscription Concealed Identifier), i.e., the encrypted SUPI."
+    },
+    { from: "gNB", to: "UE", label: "5  DLInformationTransfer (IdentityRequest)", info: {
+            header: { msg: "DLInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "IdentityRequest",
+                    "identityType": "SUCI"
+                }
+            }
+        }, comment: "TS 38.331 §5.2.1 V18.3.0 (Conditional)\n**[Conditional]** gNB delivers the Identity Request to the UE over the established RRC connection. \n- **dedicatedNAS_Message** [Optional]: Contains the NAS Identity Request forwarded by the gNB. \n   - **messageType** [Mandatory]: *Identity Request*. \n   - **identityType** [Mandatory]: *SUCI*, meaning the network is requesting the UE’s subscriber identity in concealed form."
+    },
+    { from: "UE", to: "gNB", label: "6  ULInformationTransfer (IdentityResponse)", info: {
+            header: { msg: "ULInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "IdentityResponse",
+                    "fiveGSMobileIdentity": { type: "SUCI", value: "suci-0-001-01-XXXXXXXXXXXXXX" }
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** UE responds with an **Identity Response**, providing its SUCI (Subscription Concealed Identifier). \n- **dedicatedNAS_Message** [Optional]: NAS Identity Response message. \n   - **messageType** [Mandatory]: *Identity Response*. \n   - **fiveGSMobileIdentity** [Mandatory]: The UE’s identity in the requested format – here the SUCI (encrypted SUPI) value. The UE encrypts its IMSI to form SUCI and returns it to allow the AMF to derive the SUPI (permanent subscriber ID)."
+    },
+    { from: "gNB", to: "AMF", label: "7  UplinkNASTransport (IdentityResponse)", info: {
+            header: { msg: "UplinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "IdentityResponse",
+                    "fiveGSMobileIdentity": "suci-0-001-01-XXXXXXXXXXXXXX"
+                }
+            }
+        }, comment: "TS 38.413 §8.6.5 V18.3.0 (Conditional)\n**[Conditional]** gNB forwards the Identity Response to the AMF. \n- **amfUeNgapId / ranUeNgapId**: Both IDs identifying the UE’s context (as above). \n- **nasPdu** [Mandatory]: NAS Identity Response payload. \n   - **messageType**: *Identity Response*. \n   - **fiveGSMobileIdentity**: The SUCI provided by the UE, containing the encrypted SUPI:contentReference[oaicite:21]{index=21}. The AMF will use this to retrieve the subscriber’s identity."
+    },
+    { from: "AMF", to: "NRF", label: "8  Nnrf_NFDiscovery (AUSF)", info: {
+            http: { method: "GET", uri: "/nnrf-nfm/v1/nf-instances?targetNfType=AUSF&requesterNfType=AMF&serviceNames=nausf-auth" }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AMF performs NF Discovery via NRF to locate a suitable AUSF for authentication:contentReference[oaicite:22]{index=22}. \n- **GET** request to NRF with query parameters: **targetNfType=AUSF** (looking for an AUSF service), **requesterNfType=AMF**, and **serviceNames=nausf-auth** to filter NF instances that provide the 5G authentication service."
+    },
+    { from: "NRF", to: "AMF", label: "9  Nnrf_NFDiscovery Response", info: {
+            status: 200,
+            body: {
+                nfInstances: [{
+                    nfType: "AUSF",
+                    nfInstanceId: "ausf1",
+                    endpoint: "https://ausf.example.com/nausf-auth/v1"
+                }]
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** NRF returns available AUSF instance(s) for authentication:contentReference[oaicite:23]{index=23}. \n- **nfInstances**: List of matching NF instances. Here an AUSF is returned with its **nfInstanceId** and service endpoint URL for the AMF to use."
+    },
+    { from: "AMF", to: "AUSF", label: "10  Nausf_UEAuthentication Request", info: {
+            http: { method: "POST", uri: "/nausf-auth/v1/ue-authentications" },
+            body: {
+                suci: "suci-0-001-01-XXXXXXXXXXXXXX",
+                servingNetworkName: "5G:mnc001.mcc001.3gppnetwork.org"
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AMF invokes the AUSF to start UE authentication:contentReference[oaicite:24]{index=24}. \n- **POST** to AUSF’s `/ue-authentications` endpoint with: \n   - **suci**: The UE’s SUCI (encrypted subscriber ID) for which to generate authentication data. \n   - **servingNetworkName**: Identifier of the serving network (PLMN), here “5G:mnc001.mcc001.3gppnetwork.org”, used in computing authentication vectors."
+    },
+    { from: "AUSF", to: "UDM", label: "11  Nudm_Authentication_Get Request", info: {
+            http: { method: "POST", uri: "/nudm-ueau/v1/{supi}/security-information/generate-auth-data" },
+            body: {
+                supi: "imsi-001010123456789", 
+                authType: "5G-AKA"
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AUSF requests authentication vectors from UDM for the given subscriber:contentReference[oaicite:25]{index=25}. \n- **supi**: The subscriber’s IMSI (extracted by AUSF from the SUCI). \n- **authType**: Authentication method – here *5G-AKA* is used to obtain 5G AKA authentication materials."
+    },
+    { from: "UDM", to: "UDR", label: "12  Nudr_DM_Query (AuthenticationData)", info: {
+            http: { method: "POST", uri: "/nudr-dr/v1/subscription-data/{supi}/authentication-data" },
+            body: {
+                supi: "imsi-001010123456789",
+                servingNetworkName: "001-01"
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** UDM queries the UDR for the subscriber’s authentication data:contentReference[oaicite:26]{index=26}. It provides: \n- **supi**: Subscriber’s IMSI. \n- **servingNetworkName**: Serving PLMN (MCC-MNC, here 001-01) to fetch network-specific auth keys."
+    },
+    { from: "UDR", to: "UDM", label: "13  Nudr_DM_Query Response", info: {
+            status: 200,
+            body: {
+                authenticationVector: {
+                    rand: "0x1234567890ABCDEF...",
+                    hxresStar: "0x...XRES*",
+                    autn: "0x...AUTN",
+                    k: "0x...K"
+                }
+            }
+        }, comment: "TS 29.503 V18.3.0 (Conditional)\n**[Conditional]** UDR returns an authentication vector for the subscriber. \n- **authenticationVector**: Contains the components: \n   - **rand**: Random challenge for AKA. \n   - **hxresStar**: Hash of expected response (XRES*) for RAND. \n   - **autn**: Authentication token for the UE (to validate network). \n   - **k**: Keying material (K) used to derive session keys."
+    },
+    { from: "UDM", to: "AUSF", label: "14  Nudm_Authentication_Get Response", info: {
+            status: 200,
+            body: {
+                authVector: {
+                    rand: "0x1234567890ABCDEF...",
+                    autn: "0x...AUTN",
+                    xresStar: "XRES*",
+                    kseaf: "K_SEAF"
+                }
+            }
+        }, comment: "TS 29.503 V18.3.0 (Conditional)\n**[Conditional]** UDM provides the derived authentication vector to AUSF:contentReference[oaicite:27]{index=27}. \n- **authVector**: \n   - **rand**: Random challenge. \n   - **autn**: Authentication token for UE. \n   - **xresStar**: Expected response (XRES*) for the challenge. \n   - **kseaf**: Anchor key for this UE (K_SEAF), from which the AMF will derive K_AMF for NAS security."
+    },
+    { from: "AUSF", to: "AMF", label: "15  Nausf_UEAuthentication Response", info: {
+            status: 200,
+            body: {
+                rand: "0x1234567890ABCDEF1234567890ABCDEF",
+                autn: "0xABCDEF1234567890ABCDEF1234567890",
+                hxresStar: "HXRES*",
+                kseaf: "K_SEAF"
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AUSF returns the authentication materials to AMF:contentReference[oaicite:28]{index=28}:contentReference[oaicite:29]{index=29}. \n- **rand**: Random challenge for the UE (128-bit). \n- **autn**: Authentication token for the UE. \n- **hxresStar**: Hashed expected response for the challenge (used to verify UE’s response). \n- **kseaf**: Anchor key for this UE’s session with the serving network. The AMF uses this to derive its own key (K_AMF) for NAS protection."
+    },
+    { from: "AMF", to: "gNB", label: "16  DownlinkNASTransport (AuthenticationRequest)", info: {
+            header: { msg: "DownlinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "AuthenticationRequest",
+                    "rand": "0x1234567890ABCDEF1234567890ABCDEF",
+                    "autn": "0xABCDEF1234567890ABCDEF1234567890"
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** AMF initiates authentication by sending an **Authentication Request** to the UE (via NGAP):contentReference[oaicite:30]{index=30}:contentReference[oaicite:31]{index=31}. The NAS message contains the challenge. \n- **amfUeNgapId / ranUeNgapId**: UE identifiers for NGAP context (42 and 1). \n- **nasPdu** [Mandatory]: \n   - **messageType**: *Authentication Request*. \n   - **rand** [Mandatory]: 128-bit random challenge for 5G-AKA:contentReference[oaicite:32]{index=32}. \n   - **autn** [Mandatory]: Authentication token for the UE to verify the network:contentReference[oaicite:33]{index=33}."
+    },
+    { from: "gNB", to: "UE", label: "17  DLInformationTransfer (AuthenticationRequest)", info: {
+            header: { msg: "DLInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "AuthenticationRequest",
+                    "rand": "0x1234567890ABCDEF1234567890ABCDEF",
+                    "autn": "0xABCDEF1234567890ABCDEF1234567890"
+                }
+            }
+        }, comment: "TS 38.331 §5.2.1 V18.3.0 (Conditional)\n**[Conditional]** gNB delivers the Authentication Request to the UE over RRC:contentReference[oaicite:34]{index=34}:contentReference[oaicite:35]{index=35}. \n- **dedicatedNAS_Message** [Optional]: Contains the NAS *Authentication Request* (RAND and AUTN) for the UE. The UE will use RAND and AUTN to verify the network and compute its response."
+    },
+    { from: "UE", to: "gNB", label: "18  ULInformationTransfer (AuthenticationResponse)", info: {
+            header: { msg: "ULInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "AuthenticationResponse",
+                    "resStar": "0xXXXXXXXXXXXXXXXX"
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** UE computes the authentication response and sends **Authentication Response** (RES*) to the network:contentReference[oaicite:36]{index=36}:contentReference[oaicite:37]{index=37}. \n- **dedicatedNAS_Message** [Optional]: NAS *Authentication Response* message. \n   - **messageType**: *Authentication Response*. \n   - **resStar** [Mandatory]: The UE’s calculated response (RES*) to the challenge:contentReference[oaicite:38]{index=38}."
+    },
+    { from: "gNB", to: "AMF", label: "19  UplinkNASTransport (AuthenticationResponse)", info: {
+            header: { msg: "UplinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "AuthenticationResponse",
+                    "resStar": "0xXXXXXXXXXXXXXXXX"
+                }
+            }
+        }, comment: "TS 38.413 §8.6.5 V18.3.0 (Conditional)\n**[Conditional]** gNB forwards the UE’s Authentication Response to the AMF:contentReference[oaicite:39]{index=39}. \n- **nasPdu**: Contains the RES* value returned by the UE. The AMF/AUSF will compare this RES* with the expected XRES* to determine if authentication is successful."
+    },
+    { from: "AMF", to: "AUSF", label: "20  Nausf_UEAuthentication_Confirm Request", info: {
+            http: { method: "PUT", uri: "/nausf-auth/v1/ue-authentications/{authSessionId}" },
+            body: { resStar: "0xXXXXXXXXXXXXXXXX" }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AMF sends the UE’s response to AUSF to verify the authentication:contentReference[oaicite:40]{index=40}. \n- **resStar**: The UE’s RES* (in hex form) computed from the challenge, provided to the AUSF for validation against XRES*."
+    },
+    { from: "AUSF", to: "AMF", label: "21  Nausf_UEAuthentication_Confirm Response", info: {
+            status: 200,
+            body: { authResult: "SUCCESS" }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AUSF confirms the authentication outcome:contentReference[oaicite:41]{index=41}. \n- **authResult**: *SUCCESS* indicates the UE’s RES* matched the expected XRES*, so authentication is successful. (If it were failure, the procedure would abort.)"
+    },
+    { from: "AMF", to: "gNB", label: "22  DownlinkNASTransport (SecurityModeCommand)", info: {
+            header: { msg: "DownlinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "SecurityModeCommand",
+                    "selectedNAS_Algorithms": { ciphering: "NEA0", integrity: "NIA1" },
+                    "imeisvRequest": false
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** AMF initiates NAS security mode setup to activate NAS protection for this UE:contentReference[oaicite:42]{index=42}. \n- **nasPdu**: *Security Mode Command* NAS message. \n   - **selectedNAS_Algorithms** [Mandatory]: NAS ciphering and integrity algorithms chosen by AMF:contentReference[oaicite:43]{index=43}. Here, ciphering is NEA0 (no NAS encryption) and integrity is NIA1, based on UE capabilities and policy. \n   - **imeisvRequest** [Optional]: False (not requesting the IMEISV again, since the UE’s equipment identity was already verified in a prior registration)."
+    },
+    { from: "gNB", to: "UE", label: "23  DLInformationTransfer (SecurityModeCommand)", info: {
+            header: { msg: "DLInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "SecurityModeCommand",
+                    "selectedNAS_Algorithms": { ciphering: "NEA0", integrity: "NIA1" },
+                    "imeisvRequest": false
+                }
+            }
+        }, comment: "TS 38.331 §5.2.1 V18.3.0 (Conditional)\n**[Conditional]** gNB delivers the NAS Security Mode Command to the UE over RRC:contentReference[oaicite:44]{index=44}:contentReference[oaicite:45]{index=45}. The UE will now apply the specified NAS ciphering/integrity protection for subsequent NAS messages. (No IMEISV is requested in this command.)"
+    },
+    { from: "UE", to: "gNB", label: "24  ULInformationTransfer (SecurityModeComplete)", info: {
+            header: { msg: "ULInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message [Optional]": {
+                    "messageType": "SecurityModeComplete"
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0 (Conditional)\n**[Conditional]** UE confirms that NAS security has been configured by sending **Security Mode Complete**:contentReference[oaicite:46]{index=46}. (The UE would include its IMEISV here if it had been requested, but in this case it’s not requested, so the message contains no additional IE.)"
+    },
+    { from: "gNB", to: "AMF", label: "25  UplinkNASTransport (SecurityModeComplete)", info: {
+            header: { msg: "UplinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "SecurityModeComplete"
+                }
+            }
+        }, comment: "TS 38.413 §8.6.5 V18.3.0 (Conditional)\n**[Conditional]** gNB forwards the Security Mode Complete to the AMF:contentReference[oaicite:47]{index=47}. The NAS protection for this UE is now in place (integrity on, and ciphering as configured)."
+    },
+    { from: "AMF", to: "UDM", label: "26  Nudm_UEContextManagement_Registration", info: {
+            http: { method: "PUT", uri: "/nudm-uecm/v1/{ueId}/registrations/amf-3gpp-access" },
+            body: {
+                amfInstanceId: "AMF1",
+                guami: { plmnId: "00101", amfId: "abcdef" },
+                pei: "IMEI0000000000000",
+                deregCallbackUri: "https://amf.example.com/namf-comm/v1/{ueId}/dereg-notify"
+            }
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** AMF registers/updates the UE’s context in the UDM since a new registration context is being established (e.g., after recovering from a lost context):contentReference[oaicite:48]{index=48}:contentReference[oaicite:49]{index=49}. \n- **amfInstanceId**: Identifier of this AMF instance (e.g., “AMF1”). \n- **guami**: Globally Unique AMF Identifier (PLMN 001/01 and AMF ID “abcdef”) now serving the UE:contentReference[oaicite:50]{index=50}. \n- **pei** [Optional]: The Permanent Equipment Identifier (e.g., IMEI) of the UE, if known, to register in UDM. \n- **deregCallbackUri** [Mandatory]: Callback URI that UDM can use to inform this AMF if the UE’s subscription is deregistered:contentReference[oaicite:51]{index=51}."
+    },
+    { from: "UDM", to: "AMF", label: "27  Nudm_UEContextManagement_Registration Response", info: {
+            status: 204
+        }, comment: "TS 23.502 §4.2.2.3 V18.3.0 (Conditional)\n**[Conditional]** UDM confirms the update of the registration context (HTTP 204 No Content success). The UE’s subscription profile is now associated with the new AMF."
+    },
+    { from: "AMF", to: "gNB", label: "28  DownlinkNASTransport (RegistrationAccept)", info: {
+            header: { msg: "DownlinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": {
+                    "messageType": "RegistrationAccept",
+                    "guti [Optional]": {
+                        plmnId: "001/01",
+                        amfRegionId: 1, amfSetId: 1, amfPointer: 2,
+                        tmsi: "0x11223344"
+                    },
+                    "taiList [Mandatory]": [
+                        { plmnId: "001/01", tac: "000A" }
+                    ],
+                    "allowedNSSAI [Mandatory]": [
+                        { sst: 1, sd: "010203" }
+                    ],
+                    "networkFeatureSupport [Optional]": {},
+                    "smsAllowed [Optional]": true
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0\nAMF sends **Registration Accept** to the UE (via NGAP), completing the periodic update procedure:contentReference[oaicite:52]{index=52}:contentReference[oaicite:53]{index=53}. \n- **nasPdu** [Mandatory]: NAS *Registration Accept* message, possibly ciphered and integrity-protected (as NAS security is active). Key IEs include: \n   - **guti** [Optional]: The new 5G-GUTI assigned to the UE:contentReference[oaicite:54]{index=54}. (The AMF may refresh the UE’s GUTI for security; here a new GUTI with AMF Pointer 2 and TMSI 0x11223344 is given. If no change, this IE may be omitted and the UE retains its old GUTI.) \n   - **taiList** [Mandatory]: List of Tracking Areas the UE is registered in:contentReference[oaicite:55]{index=55}:contentReference[oaicite:56]{index=56}. Here, the current TAI (001/01-000A) is provided. The UE will consider itself registered in this TA (and others in the list, if any). \n   - **allowedNSSAI** [Mandatory]: The Allowed NSSAI for the UE in this registration area:contentReference[oaicite:57]{index=57}. In this case, SST=1 SD=010203 is confirmed (matching the UE’s subscribed/requested slice). The UE shall use this slice for services in the TA. \n   - **networkFeatureSupport** [Optional]: Network features supported for the UE (e.g., IMS VoPS, SMS support). Not shown here (left empty) for brevity. \n   - **smsAllowed** [Optional]: Indicates whether SMS-over-NAS is allowed for the UE:contentReference[oaicite:58]{index=58}. `true` here, meaning the UE can use NAS for SMS (if the subscription permits)."
+    },
+    { from: "gNB", to: "UE", label: "29  DLInformationTransfer (RegistrationAccept)", info: {
+            header: { msg: "DLInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message": {
+                    "messageType": "RegistrationAccept",
+                    "guti": { plmnId: "001/01", amfRegionId: 1, amfSetId: 1, amfPointer: 2, tmsi: "0x11223344" },
+                    "taiList": [{ plmnId: "001/01", tac: "000A" }],
+                    "allowedNSSAI": [{ sst: 1, sd: "010203" }],
+                    "networkFeatureSupport": {},
+                    "smsAllowed": true
+                }
+            }
+        }, comment: "TS 38.331 §5.2.1 V18.3.0\nThe gNB delivers the Registration Accept NAS message to the UE over RRC:contentReference[oaicite:59]{index=59}:contentReference[oaicite:60]{index=60}. This message is integrity-protected and ciphered as per the NAS security now in effect. The UE receives the new GUTI (if provided) and updated registration parameters."
+    },
+    { from: "UE", to: "gNB", label: "30  ULInformationTransfer (RegistrationComplete)", info: {
+            header: { msg: "ULInformationTransfer", protocol: "RRC" },
+            payload: {
+                "dedicatedNAS_Message": {
+                    "messageType": "RegistrationComplete"
+                }
+            }
+        }, comment: "TS 24.501 §5.4.1.4 V18.3.0\nUE sends **Registration Complete** to acknowledge the Registration Accept:contentReference[oaicite:61]{index=61}. \n- **dedicatedNAS_Message**: NAS *Registration Complete* message (no additional IEs). This informs the network that the UE has successfully processed the Registration Accept and that no further NAS messages are pending."
+    },
+    { from: "gNB", to: "AMF", label: "31  UplinkNASTransport (RegistrationComplete)", info: {
+            header: { msg: "UplinkNASTransport", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "nasPdu [Mandatory]": { "messageType": "RegistrationComplete" }
+            }
+        }, comment: "TS 38.413 §8.6.5 V18.3.0\nThe gNB forwards the Registration Complete to the AMF:contentReference[oaicite:62]{index=62}. This signals to the AMF that the UE has finished the update procedure and the registration is confirmed."
+    },
+    { from: "AMF", to: "gNB", label: "32  UEContextReleaseCommand", info: {
+            header: { msg: "UEContextReleaseCommand", protocol: "NGAP" },
+            payload: { 
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1,
+                "cause [Mandatory]": "UE-Idle"
+            }
+        }, comment: "TS 38.413 §8.9.3 V18.3.0\nAMF instructs the gNB to release the UE’s NGAP context and RRC connection now that the update is complete:contentReference[oaicite:63]{index=63}. \n- **amfUeNgapId / ranUeNgapId**: IDs of the UE context to release. \n- **cause** [Mandatory]: Reason for release. “UE-Idle” (a normal release cause) indicates no further activity; the UE can go back to idle mode."
+    },
+    { from: "gNB", to: "UE", label: "33  RRCRelease", info: {
+            header: { msg: "RRCRelease", protocol: "RRC" },
+            payload: { "releaseCause [Optional]": "normal" }
+        }, comment: "TS 38.331 §5.3.8 V18.3.0\nThe gNB releases the RRC connection, transitioning the UE to RRC Idle mode:contentReference[oaicite:64]{index=64}. \n- **releaseCause** [Optional]: Indicates the release reason. “normal” signifies a normal release (no error condition):contentReference[oaicite:65]{index=65}. The UE can now enter idle state, having updated its registration."
+    },
+    { from: "gNB", to: "AMF", label: "34  UEContextReleaseComplete", info: {
+            header: { msg: "UEContextReleaseComplete", protocol: "NGAP" },
+            payload: {
+                "amfUeNgapId [Mandatory]": 42,
+                "ranUeNgapId [Mandatory]": 1
+            }
+        }, comment: "TS 38.413 §8.9.3 V18.3.0\nThe gNB confirms to the AMF that the UE context release is complete:contentReference[oaicite:66]{index=66}. The UE’s RAN connection and NGAP context are now cleared. The periodic registration update procedure is finished, and the UE remains registered in the 5GS (RM-REGISTERED) state, back in idle mode until the next activity or timer."
+    }
+];
+  /* ====== 页面元素 ====== */
+      const headerInner=document.getElementById('header-names-inner');
+      const bodyDiv=document.getElementById('diagram-body');
+      const svg=document.getElementById('diagram');
+      const diagramContainer=document.getElementById('diagram-container');
+      const verticalDivider=document.getElementById('vertical-divider');
+      const viewerWrapper=document.getElementById('viewer-wrapper');
+
+      const rightDetail=document.getElementById('right-detail');
+      const jsonViewer=document.getElementById('json-viewer');
+      const commentViewer=document.getElementById('comment-viewer');
+      const commentContent=document.getElementById('comment-content');
+      const hDivider=document.getElementById('horizontal-divider');
+
+      /* ====== 绘制信令图 ====== */
+      const headerHeight=50;
+      const margin={top:headerHeight,bottom:50,left:100,right:100};
+      const xStep=200,msgSpacing=80;
+      const totalHeight=margin.top+msgSpacing*(messages.length+1)+margin.bottom;
+      const totalWidth=margin.left+xStep*(nodes.length-1)+margin.right;
+      svg.setAttribute('width',totalWidth);
+      svg.setAttribute('height',totalHeight);
+      headerInner.style.width=totalWidth+'px';
+
+      /* X 坐标 */
+      const xs={};
+      nodes.forEach((n,i)=>{
+        const x=margin.left+i*xStep;
+        xs[n]=x;
+        const d=document.createElement('div');
+        d.className='node-name';
+        d.textContent=n;
+        d.style.left=x+'px';
+        headerInner.appendChild(d);
+        const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1',x);line.setAttribute('y1',margin.top);
+        line.setAttribute('x2',x);line.setAttribute('y2',totalHeight-margin.bottom);
+        line.setAttribute('stroke','#aaa');line.setAttribute('stroke-dasharray','4 2');
+        svg.appendChild(line);
+      });
+
+      /* 箭头 marker */
+      const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+      const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+      marker.setAttribute('id','arrow');marker.setAttribute('markerWidth','8');marker.setAttribute('markerHeight','8');
+      marker.setAttribute('refX','6');marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M0,0 L0,6 L6,3 Z');path.setAttribute('fill','#000');
+      marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+
+      /* 渲染消息线条和标签 */
+      messages.forEach((m,i)=>{
+        const y=margin.top+msgSpacing*(i+1);
+        const x1=xs[m.from],x2=xs[m.to];
+        const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1',x1);ln.setAttribute('y1',y);
+        ln.setAttribute('x2',x2);ln.setAttribute('y2',y);
+        ln.setAttribute('stroke','#000');ln.setAttribute('marker-end','url(#arrow)');
+        svg.appendChild(ln);
+        const lbl=document.createElementNS('http://www.w3.org/2000/svg','text');
+        lbl.setAttribute('x',(x1+x2)/2);lbl.setAttribute('y',y-6);
+        lbl.setAttribute('text-anchor','middle');lbl.classList.add('message-label');
+        lbl.textContent=m.label;
+        lbl.addEventListener('click',()=>{
+          renderJSON(m.info,jsonViewer);
+          commentContent.innerHTML=marked.parse(m.comment);
+        });
+        svg.appendChild(lbl);
+      });
+
+      /* ====== JSON 渲染函数 ====== */
+      function renderJSON(obj,container){
+        container.innerHTML='';
+        function walk(k,v,parent){
+          if(v&&typeof v==='object'){
+            const d=document.createElement('details');d.open=true;
+            const s=document.createElement('summary');s.textContent=k;d.appendChild(s);
+            for(const kk in v)walk(kk,v[kk],d);
+            parent.appendChild(d);
+          }else{
+            const div=document.createElement('div');
+            div.textContent=k+': '+v;parent.appendChild(div);
+          }
+        }
+        for(const key in obj)walk(key,obj[key],container);
+      }
+
+      
+      /* ====== 同步水平滚动，保持节点标题与竖线对齐 ===== */
+      bodyDiv.addEventListener('scroll', () => {
+        headerInner.style.transform = `translateX(${-bodyDiv.scrollLeft}px)`;
+      });
+      /* 初始化一次，避免刚加载时错位 */
+      headerInner.style.transform = 'translateX(0px)';
+      /* ====== 右侧面板拖拽 ===== */
+      verticalDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startX=e.clientX,startW=viewerWrapper.offsetWidth;
+        function onMove(ev){viewerWrapper.style.width=(startW-(ev.clientX-startX))+'px';}
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      function initVertical(){const h=rightDetail.clientHeight/2;jsonViewer.style.top='0';jsonViewer.style.height=h+'px';hDivider.style.top=h+'px';commentViewer.style.top=(h+5)+'px';commentViewer.style.height=(h-5)+'px';}
+      initVertical();window.addEventListener('resize',initVertical);
+      hDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startY=e.clientY,startH=jsonViewer.offsetHeight;
+        function onMove(ev){
+          const newH=startH+(ev.clientY-startY);
+          jsonViewer.style.height=newH+'px';hDivider.style.top=newH+'px';
+          commentViewer.style.top=(newH+5)+'px';commentViewer.style.height=(rightDetail.clientHeight-newH-5)+'px';
+        }
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      /* ====== 缩放与平移 ===== */
+      const originalW=totalWidth,originalH=totalHeight;let scale=1;
+      svg.setAttribute('viewBox',`0 0 ${originalW} ${originalH}`);
+
+      /* 拖拽平移（保持功能，不改变指针样式） */
+      let dragging=false,sx=0,sy=0;
+      diagramContainer.addEventListener('mousedown',e=>{
+        dragging=true;sx=e.clientX;sy=e.clientY;e.preventDefault();});
+      document.addEventListener('mousemove',e=>{
+        if(!dragging) return;
+        diagramContainer.scrollLeft-=e.clientX-sx;
+        diagramContainer.scrollTop -=e.clientY-sy;
+        sx=e.clientX;sy=e.clientY;
+      });
+      document.addEventListener('mouseup',()=>{dragging=false;});
+
+      /* 缩放 */
+      diagramContainer.addEventListener('wheel',e=>{
+        if(!e.ctrlKey)return;
+        e.preventDefault();
+        const factor=(Math.abs(e.deltaY)<50)?(e.deltaY<0?1.05:0.95):(e.deltaY<0?1.2:0.8);
+        const newScale=scale*factor;if(newScale<0.1||newScale>10)return;
+        const rect=diagramContainer.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        const contentX=(diagramContainer.scrollLeft+cx)/scale;
+        const contentY=(diagramContainer.scrollTop+cy)/scale;
+        scale=newScale;
+        svg.setAttribute('width',originalW*scale);svg.setAttribute('height',originalH*scale);
+        headerInner.style.width=(originalW*scale)+'px';
+        nodes.forEach((n,i)=>{headerInner.children[i].style.left=((margin.left+i*xStep)*scale)+'px';});
+        diagramContainer.scrollLeft=contentX*scale-cx;
+        diagramContainer.scrollTop =contentY*scale-cy;
+      },{passive:false});
+    });
+  </script>
+
+  <script id="addon-script">
+    document.addEventListener('DOMContentLoaded', function(){
+      const labels = Array.from(document.querySelectorAll('.message-label'));
+      let currentIdx = -1;
+      const select = (idx, viaKey=false) => {
+        if(idx < 0 || idx >= labels.length) return;
+        if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+        currentIdx = idx;
+        const lbl = labels[currentIdx];
+        lbl.classList.add('selected');
+        if(viaKey) {
+          lbl.scrollIntoView({block:'center', inline:'center'});
+        }
+        lbl.dispatchEvent(new Event('click'));
+      };
+      labels.forEach((lbl, idx) => {
+        lbl.addEventListener('click', () => {
+          if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+          currentIdx = idx;
+          lbl.classList.add('selected');
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowDown'){
+          e.preventDefault();
+          select(currentIdx + 1, true);
+        } else if(e.key === 'ArrowUp'){
+          e.preventDefault();
+          select(currentIdx - 1, true);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
