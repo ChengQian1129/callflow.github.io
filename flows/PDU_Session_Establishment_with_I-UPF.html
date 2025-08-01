@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>5GC 信令流程图 - 可调布局 (支持缩放/平移)</title>
+  <style>
+    /* ===== 基础布局 ===== */
+    html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    #container{display:flex;height:100vh;overflow:hidden;}
+
+    /* ===== 左侧信令图容器 =====
+       修复：去掉原先的 cursor:grab; 以免在左侧空白区域出现“小手掌”指针 */
+    #diagram-container{flex:1;position:relative;overflow:hidden;}
+
+    #header-names{position:absolute;top:0;left:0;right:0;height:50px;background:#fff;border-bottom:1px solid #eee;overflow:hidden;pointer-events:none;}
+    #header-names-inner{position:absolute;top:0;left:0;height:100%;}
+    #header-names-inner .node-name{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:14px;color:#333;}
+    #diagram-body{position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;}
+    #diagram{display:block;}
+
+    /* ===== 垂直分隔条 ===== */
+    #vertical-divider{width:5px;background:#ddd;cursor:col-resize;user-select:none;}
+
+    /* ===== 右侧面板 ===== */
+    #viewer-wrapper{width:400px;display:flex;flex-direction:column;overflow:hidden;}
+    #viewer-header{flex:none;padding:10px 12px;background:#f5f5f5;border-bottom:1px solid #ccc;font-weight:bold;}
+
+    /* ===== 右侧上下分区父容器 ===== */
+    #right-detail{position:relative;flex:1;min-height:0;}
+
+    /* ===== 右侧上下内容区 ===== */
+    #json-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #comment-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #json-viewer details{margin-left:12px;margin-bottom:4px;}
+    #json-viewer summary{cursor:pointer;}
+
+    /* ===== 水平分隔条 ===== */
+    #horizontal-divider{
+      position:absolute;left:0;right:0;height:5px;background:#ddd;
+      cursor:row-resize;user-select:none;
+    }
+
+    /* ===== 信令文字标签 ===== */
+    .message-label{cursor:default;}
+    .message-label:hover{fill:#007ACC;}
+
+    #comment-content {
+      max-width: 800px;
+      margin: 0 auto;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    #comment-content code {
+      font-family: Consolas,"Courier New",monospace;
+      background-color: #f5f5f5;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    #comment-content pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+    #comment-content pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+    #comment-content ul, #comment-content ol {
+      margin: 0.5em 0;
+      padding-left: 1.5em;
+    }
+    #comment-content li {
+      margin: 0.2em 0;
+    }
+    #comment-viewer::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #comment-viewer::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+    #comment-viewer::-webkit-scrollbar-track {
+      background-color: #f5f5f5;
+    }
+  </style>
+
+  <style id="addon-style">
+    .message-label.selected{fill:#ff5722;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <!-- 左侧信令图 -->
+    <div id="diagram-container">
+      <div id="header-names"><div id="header-names-inner"></div></div>
+      <div id="diagram-body"><svg id="diagram"></svg></div>
+    </div>
+
+    <!-- 垂直分隔条 -->
+    <div id="vertical-divider"></div>
+
+    <!-- 右侧消息详情 -->
+    <div id="viewer-wrapper">
+      <div id="viewer-header">消息详情</div>
+      <div id="right-detail">
+        <div id="json-viewer">请点击左侧消息查看详情</div>
+        <div id="horizontal-divider"></div>
+        <div id="comment-viewer">
+           <div id="comment-content">请点击左侧消息查看注释</div>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/16.1.1/lib/marked.umd.min.js"></script>
+  <script>
+      document.addEventListener('DOMContentLoaded', () => {
+      /* ====== 数据 ====== */
+const nodes = ["UE", "RAN", "AMF", "SMF", "I-UPF/PSA", "NRF", "UDM", "PCF", "RADIUS", "CHF"];
+
+const messages = [
+  { from: "UE", to: "RAN", label: "0  RRCSetupRequest", info: {
+      header: { msg: "RRCSetupRequest", protocol: "RRC" },
+      payload: {
+        "ue-Identity [M]": "5G-S-TMSI or random ID (temporary UE identity)",
+        "establishmentCause [M]": "mo-Data (mobile originated data)",
+        "spare [O]": "(padding)"
+      }
+    }, comment: "TS 38.331 §5.3.3 V17.1.0:contentReference[oaicite:0]{index=0}:contentReference[oaicite:1]{index=1}. UE initiates RRC connection establishment to set up a signaling connection for data. **ue-Identity** identifies the UE (if known, a 5G-S-TMSI; otherwise a random value for contention resolution). **establishmentCause** indicates the reason (here, mobile-originated data traffic triggers the connection setup). The UE is requesting RRC resources to send an uplink NAS message for a new PDU session."
+  },
+
+  { from: "RAN", to: "UE", label: "1  RRCSetup", info: {
+      header: { msg: "RRCSetup", protocol: "RRC" },
+      payload: {
+        "rrc-TransactionIdentifier [M]": 1,
+        "criticalExtensions [M]": {
+          "c1": {
+            "setup [M]": {
+              "radioBearerConfig [O]": {
+                "srb-ToAddModList [M]": [{
+                  "srb-Identity [M]": 1,
+                  "servedRadioBearer [O]": "(SRB1 configuration parameters)"
+                }]
+              },
+              "masterCellGroup [M]": "(Initial cell group config for UE)",
+              "ue-TimersAndConstants [O]": "(default timers configuration)"
+            }
+          }
+        }
+      }
+    }, comment: "TS 38.331 §5.3.3 V17.1.0. The gNB accepts the connection by sending **RRC Setup**, providing configuration for SRB1 (Signaling Radio Bearer) and initial access parameters:contentReference[oaicite:2]{index=2}:contentReference[oaicite:3]{index=3}. The **rrc-TransactionIdentifier** (here 1) matches the UE’s request. Under *radioBearerConfig*, SRB1 is established (identity = 1). **masterCellGroup** carries MAC/PHY config for the primary cell. Once received, the UE will apply these configs and be ready to exchange NAS messages."
+  },
+
+  { from: "UE", to: "RAN", label: "2  RRCSetupComplete", info: {
+      header: { msg: "RRCSetupComplete", protocol: "RRC" },
+      payload: {
+        "rrc-TransactionIdentifier [M]": 1,
+        "selectedPLMN-Identity [M]": 1,
+        "dedicatedNAS-Message [C]": {
+          "ServiceRequest": {
+            "5GS-MobileIdentity [M]": "5G-GUTI (if available) or SUCI",
+            "uplinkDataStatus [O]": "(indicates pending uplink NAS messages)",
+            "PTI [M]": 0
+          }
+        }
+      }
+    }, comment: "TS 38.331 §5.3.3 V17.1.0, TS 24.501 §8.2.6 V18.8.0:contentReference[oaicite:4]{index=4}. UE confirms RRC setup and signals readiness. It includes a **Dedicated NAS Message**: a 5G MM *Service Request*. The Service Request informs the AMF that the UE, now in CM-IDLE, wants to establish a NAS signaling connection for data transfer. It contains the UE’s identity (e.g. GUTI) and indicates pending uplink data (the PDU Session Establishment NAS). This allows the network to set up core network resources for the upcoming PDU session."
+  },
+
+  { from: "RAN", to: "AMF", label: "3  InitialUEMsg (Service Request)", info: {
+      header: { msg: "Initial UE Message", protocol: "NGAP" },
+      payload: {
+        "RAN-UE-NGAP-ID [M]": "(UE context ID in gNB)",
+        "NAS-PDU [M]": "Service Request (5GMM NAS)",
+        "UserLocationInformation [M]": "(TAI, cell ID identifying UE location)",
+        "RRCEstablishmentCause [O]": "mo-Data"
+      }
+    }, comment: "TS 38.413 §8.6.3 V17.0.0. The gNB forwards the Service Request to the AMF via NGAP *Initial UE Message*. This message carries the NAS Service Request (the UE’s signal to resume/connect to 5GC for data):contentReference[oaicite:5]{index=5}. It includes the UE’s temporary RAN ID and location. The AMF now knows the UE is requesting a user-plane setup (PDU session) and will proceed to authenticate/authorize the request."
+  },
+
+  { from: "AMF", to: "UE", label: "4  NGAPSecurityModeCommand", info: {
+      header: { msg: "NAS Security Mode Command", protocol: "NAS/NGAP" },
+      payload: {
+        "SelectedNASIntegrity [M]": "NIA2 (e.g., 128-bit integrity alg)",
+        "SelectedNASEncryption [M]": "NEA2 (e.g., 128-bit cipher alg)",
+        "IMEISV-Request [O]": "not requested",
+        "NAS-MAC [M]": "(message authentication code)"
+      }
+    }, comment: "TS 23.502 §4.2.3 V17.5.0, TS 24.501 §8.2 V18.8.0. As part of resuming secure communications, the AMF (via RAN) ensures NAS signaling is protected. The **NAS Security Mode Command** (sent within NGAP downlink NAS transport) tells the UE which NAS ciphering and integrity algorithms to use:contentReference[oaicite:6]{index=6}. It includes an integrity MAC to verify the command. The UE will respond to confirm activation of NAS security, after which the NAS PDU Session procedure can continue securely."
+  },
+
+  { from: "UE", to: "AMF", label: "5  SecurityModeComplete", info: {
+      header: { msg: "NAS Security Mode Complete", protocol: "NAS" },
+      payload: {
+        "SelectedAlgorithms [M]": "Integrity: NIA2, Ciphering: NEA2 (confirmed)",
+        "NAS-MAC [M]": "(MAC of the response)"
+      }
+    }, comment: "TS 24.501 §8.2 V18.8.0. The UE confirms NAS security activation by replying with *Security Mode Complete*. It indicates acceptance of the selected NAS integrity and encryption algorithms. From this point, all subsequent NAS messages (including the PDU Session Establishment Request) are integrity-protected and ciphered between UE and AMF."
+  },
+
+  { from: "UE", to: "AMF", label: "6  PDU Session Establishment Request", info: {
+      header: { msg: "PDU Session Establishment Request", protocol: "5GS NAS SM" },
+      payload: {
+        "PDUSessionID [M]": 10,
+        "PTI [M]": 0,
+        "RequestType [M]": "Initial Request (new PDU session)",
+        "SNSSAI [C]": "{ SST:1, SD:010203 } (single-nssai for this session)",
+        "DNN [C]": "internet (requested Data Network Name)",
+        "PDUSessionType [M]": "IPv4v6",
+        "SSCMode [M]": "SSC mode 1 (default session continuity)",
+        "SMPayload (IntegrityProtMaxDataRate) [M]": "Full data rate allowed (0xFF)",
+        "5GSMCapability [O]": "(UE capabilities for PDU session, e.g. header compression)",
+        "Always-on PDU [O]": "(absent – not requesting always-on session)"
+      }
+    }, comment: "TS 24.501 §8.3.3, §8.3.4 V18.8.0:contentReference[oaicite:7]{index=7}:contentReference[oaicite:8]{index=8}. The UE requests establishment of a new PDU session by sending a NAS *PDU Session Establishment Request*. **PDUSessionID** identifies the session (here 10). **RequestType** is *Initial*, indicating a new session (not a handover or existing PDU). The UE optionally specifies the S-NSSAI (slice) and DNN (APN) it wants (e.g. slice SST 1, DNN \"internet\"). **PDU Session Type** is IPv4v6 (requesting dual-stack IP). **SSC Mode** 1 means the session is not guaranteed to survive mobility events (standard mode). The UE also provides its maximum NAS-integrity protected data rate (often set to allow full rate):contentReference[oaicite:9]{index=9}:contentReference[oaicite:10]{index=10}. This message is integrity protected by NAS security. The AMF receives this and will invoke SMF services to set up the session."
+  },
+
+  { from: "AMF", to: "SMF", label: "7  Namf_Communication_CreateSMContext Request", info: {
+      header: { api: "Namf_Communication_CreateSMContext", protocol: "N11 (AMF→SMF)" },
+      payload: {
+        "supi [M]": "imsi-001011234567890 (UE’s SUPI)",
+        "pduSessionId [M]": 10,
+        "dnn [M]": "internet",
+        "sNssai [M]": "{ SST:1, SD:010203 }",
+        "requestType [M]": "InitialRequest",
+        "pti [M]": 0,
+        "anType [M]": "3GPP access",
+        "smContextStatusUri [O]": "(AMF callback URI for SM context status)",
+        "servingNfId [O]": "(AMF instance ID)",
+        "ueLocation [O]": "(UE location info - TAI, cell ID)",
+        "N1SMContainer [M]": "(NAS PDU Session Establishment Request)",
+        "N1SMInfoType [M]": "PDU Session Establishment Request"
+      }
+    }, comment: "TS 29.502 §5.2.2.2 V17.7.0:contentReference[oaicite:11]{index=11}:contentReference[oaicite:12]{index=12}. The AMF selects an SMF and invokes the Nsmf service via a *Create SM Context Request*. This carries the UE’s identifier (SUPI or GUTI), the requested **PDU Session ID**, DNN and S-NSSAI, and the NAS message from the UE (encapsulated as N1 SM Container):contentReference[oaicite:13]{index=13}:contentReference[oaicite:14]{index=14}. The AMF indicates this is an initial request for a new session. The SMF will create a context for this PDU session and proceed with subscriber data fetch and policy setup. (The AMF also provides UE access type and location, which the SMF may use for policy decisions or UPF selection.)"
+  },
+
+  { from: "SMF", to: "AMF", label: "8  Namf_Communication_CreateSMContext Response", info: {
+      header: { api: "Namf_Communication_CreateSMContext", protocol: "N11 (SMF→AMF)" },
+      payload: {
+        "smContextRef [M]": "(SMF’s reference to this SM context resource)",
+        "pduSessionId [M]": 10,
+        "selectedUPF [M]": "I-UPF/PSA (addresses of user plane node(s))",
+        "responseCode [M]": "201 Created",
+        "N1SMContainer [C]": "(if error or redirection, NAS PDU Session Reject or redirect info)"
+      }
+    }, comment: "TS 29.502 §5.2.2.2 V17.7.0:contentReference[oaicite:15]{index=15}:contentReference[oaicite:16]{index=16}. The SMF acknowledges creation of the SM Context. In a successful case, the response (HTTP 201) includes a reference to the SM context resource in the SMF and echoes the PDU Session ID. At this stage, the SMF may not yet include the NAS Accept (since further steps are needed before the session can be accepted). Instead, the SMF signals that the context is established and it will continue with policy and resource allocation. (If the SMF had to reject the request immediately, it would provide a NAS reject message in an N1 SM container here, but in this flow the establishment continues.)"
+  },
+
+  { from: "SMF", to: "NRF", label: "9  Nnrf_NFDiscovery Request (PCF)", info: {
+      header: { api: "Nnrf_NFDiscovery_Request", protocol: "Nnrf (HTTP/2)" },
+      payload: {
+        "requesterNfType [M]": "SMF",
+        "targetNfType [M]": "PCF",
+        "requestCriteria [O]": "Serving PLMN + Slice (SST=1, SD=010203)",
+        "dnn [O]": "internet",
+        "preferredLocality [O]": "(SMF’s locality to find nearby PCF)"
+      }
+    }, comment: "TS 29.510 §5.3.3 V17.7.0. The SMF queries the NRF to find a suitable PCF for this session:contentReference[oaicite:17]{index=17}. It specifies it needs a **PCF** (target NF type) that can serve the UE’s network slice and DNN. The NRF returns the profile of an appropriate PCF instance (e.g. endpoint address and supported services) that the SMF will use for policy control. (If the SMF already has a PCF assigned from registration or configured, this step may be skipped. Here, dynamic discovery is shown.)"
+  },
+
+  { from: "NRF", to: "SMF", label: "10  Nnrf_NFDiscovery Response (PCF)", info: {
+      header: { api: "Nnrf_NFDiscovery_Response", protocol: "Nnrf" },
+      payload: {
+        "nfInstances [M]": [
+          {
+            "nfInstanceId": "pcf-12345",
+            "nfType": "PCF",
+            "nfStatus": "REGISTERED",
+            "fqdn": "pcf.example.net",
+            "ipv4Addresses": ["198.51.100.10"],
+            "nfServiceList": [
+              { "serviceName": "Npcf_SMPolicyControl", "versions": ["v1"], "endpoint": "/npcf-smpolicy/v1" }
+            ]
+          }
+        ]
+      }
+    }, comment: "TS 29.510 §5.3.3 V17.7.0. The NRF responds with a list of PCF instances matching the query (typically one). It includes the PCF’s network address and available services:contentReference[oaicite:18]{index=18}. The SMF selects one PCF from this list for the session. Now the SMF knows where to send the policy establishment request (Npcf_SMPolicyControl) for this PDU session."
+  },
+
+  { from: "SMF", to: "UDM", label: "11  Nudm_SubscriberDataManagement_Get Request", info: {
+      header: { api: "Nudm_SDM_Get", protocol: "Nudm (HTTP/2)" },
+      payload: {
+        "supi [M]": "001011234567890",
+        "subset [M]": "SessionManagementSubscriptionData",
+        "dnn [O]": "internet",
+        "snssai [O]": "{ SST:1, SD:010203 }"
+      }
+    }, comment: "TS 29.503 §6.1.3.2 V17.18.0. The SMF queries the UDM for the subscriber’s session management subscription data:contentReference[oaicite:19]{index=19}. It provides the SUPI and asks for subscription info relevant to the requested DNN and slice. The UDM will return parameters like the allowed services and QoS profiles for this DNN, default session AMBR (aggregated bitrate), allowed PDN types, whether a secondary authentication with an external DN-AAA is required, etc. This ensures the SMF knows the subscriber’s plan and constraints before establishing the session."
+  },
+
+  { from: "UDM", to: "SMF", label: "12  Nudm_SubscriberDataManagement_Get Response", info: {
+      header: { api: "Nudm_SDM_Get", protocol: "Nudm" },
+      payload: {
+        "subscriptionData [M]": {
+          "sessionManagementSubsData": {
+            "singleNssai": "{ SST:1, SD:010203 }",
+            "dnnConfigurations": {
+              "internet": {
+                "defaultSessionAMBR": "Downlink=2 Gbps, Uplink=1 Gbps",
+                "sessionQuota": "unlimited",
+                "allowedPDUSessionTypes": ["IPv4","IPv6"],
+                "sscModes": ["SSC mode 1"],
+                "5gFeatures": "(e.g. ATSSS not subscribed)",
+                "upSecurity": "(user-plane integrity not required)",
+                "secondaryAuth [C]": "Needed (DN-AAA authentication required for this DNN)"
+              }
+            }
+          }
+        }
+      }
+    }, comment: "TS 29.503 §6.1.3.2 V17.18.0. The UDM returns the subscriber’s session management subscription data for the requested network slice and DNN. This includes the **allowed session AMBR** (max data rates for the session), permitted PDU session types (IPv4/v6), and other subscription flags. In this example, the data indicates the DNN \"internet\" supports dual-stack, with a certain AMBR, and uses SSC mode 1. It also flags if **secondary authentication** is required for this DNN:contentReference[oaicite:20]{index=20}:contentReference[oaicite:21]{index=21} (meaning the UE must perform additional authentication with an external data network AAA before full access). The SMF will use this info for policy and to decide if a DN-AAA procedure is needed."
+  },
+
+  { from: "SMF", to: "PCF", label: "13  Npcf_SMPolicyControl_Create Request", info: {
+      header: { api: "Npcf_SMPolicyControl_Create", protocol: "N7 (SMF→PCF)" },
+      payload: {
+        "supi [M]": "001011234567890",
+        "pduSessionId [M]": 10,
+        "dnn [M]": "internet",
+        "sNssai [M]": "{ SST:1, SD:010203 }",
+        "notificationUri [M]": "https://smf.callback/sm-policy-notify",
+        "accessType [M]": "3GPP",
+        "pdnType [M]": "IPv4v6",
+        "SubscribedQos [O]": {
+          "default5Qi": 9,
+          "allocationRetentionPriority": { "priorityLevel": 9, "preemptionCap": "NOT_PREEMPT", "preemptionVuln": "PREEMPTABLE" }
+        },
+        "suppFeat [O]": "FBF0000000000000 (bitmap of supported features)",
+        "userLocationInfo [O]": "(UE location - TAI, cell ID)",
+        "servingNetwork [O]": "001-01 (PLMN ID)"
+      }
+    }, comment: "TS 29.512 §4.2.2.2 V18.7.0:contentReference[oaicite:22]{index=22}. The SMF requests the PCF to create an SM Policy Association for this PDU session. It provides context including the UE’s identity, slice, DNN, and session specifics. The **notificationUri** is where the SMF wants to receive policy updates. The SMF may include the subscriber’s **subscribed QoS profile** (e.g., default 5QI 9 for internet) and the UE’s location and serving PLMN. The PCF will use this information plus subscription data (fetched via UDR internally) to determine policy rules (QoS, charging, gating) for the session."
+  },
+
+  { from: "PCF", to: "SMF", label: "14  Npcf_SMPolicyControl_Create Response", info: {
+      header: { api: "Npcf_SMPolicyControl_Create", protocol: "N7 (PCF→SMF)" },
+      payload: {
+        "smPolicyId [M]": "urn:uuid:pcf-sess-1234 (SM Policy Association ID)",
+        "policyRules [M]": [
+           { "ruleId": "default", "QoS": { "5QI": 9, "ARP": 1 }, "flowFilters": "allow all", "priority": 255 }
+        ],
+        "sessionAmbr [M]": "Downlink=2 Gbps, Uplink=1 Gbps",
+        "chargingInstr [O]": "(charging key or rating group for the session)",
+        "refUmData [O]": "(reference to usage monitoring profile)",
+        "afEvents [O]": "(events for AF not subscribed in this case)",
+        "suppFeat [O]": "FBF0000000000000"
+      }
+    }, comment: "TS 29.512 §4.2.2.2 V18.7.0:contentReference[oaicite:23]{index=23}:contentReference[oaicite:24]{index=24}. The PCF responds with the established **SM Policy Association**. It includes a unique identifier (smPolicyId) for this policy session and the set of policy rules applicable. Typically, a default QoS rule is provided for the default bearer: e.g., allow all traffic with a certain 5QI (here 9 for default internet) and an ARP priority. The PCF confirms the session AMBR (matching subscription) and may include charging parameters (like a rating group for offline charging, or credit control information if online). These rules instruct the SMF how to configure the UPF (e.g., what QoS to enforce for this PDU session). The SMF will now enforce these policies when setting up the user plane. It also notes if the PCF expects any event reports. (In this case, no special AF events are subscribed.)"
+  },
+
+  { from: "SMF", to: "RADIUS", label: "15  RADIUS Access-Request (DN-AAA)", info: {
+      header: { code: "Access-Request", protocol: "RADIUS" },
+      payload: {
+        "User-Name [M]": "001011234567890@5G.mnc001.mcc001.3gppnetwork.org",
+        "NAS-Identifier [M]": "SMF01 (SMF node ID)",
+        "Called-Station-Id [M]": "internet",
+        "NAS-IP-Address [M]": "198.51.100.1 (SMF’s IP)",
+        "EAP-Message [C]": "EAP-Response/AKA′ (if EAP-based auth in progress)",
+        "Message-Authenticator [M]": "(HMAC-MD5 of packet for integrity)"
+      }
+    }, comment: "TS 29.561 §11.1.1 V16.7.0:contentReference[oaicite:25]{index=25}:contentReference[oaicite:26]{index=26}. Since the subscription indicated secondary authentication is required for this DNN, the SMF acts as a RADIUS client and initiates a *DN-AAA authentication* procedure. It sends a RADIUS **Access-Request** to the configured DN-AAA server. The request includes the **User-Name** (e.g., IMSI or SUPI as identity, formatted per realm), and identifies the requested network (DNN \"internet\") as the called station ID. If EAP authentication is used, the SMF will forward the UE’s EAP credentials within the EAP-Message attribute (in this first request or subsequent exchanges). The SMF provides its identity and authenticators. This message asks the external Data Network’s AAA server to authenticate and authorize the UE for network access."
+  },
+
+  { from: "RADIUS", to: "SMF", label: "16  RADIUS Access-Accept (DN-AAA)", info: {
+      header: { code: "Access-Accept", protocol: "RADIUS" },
+      payload: {
+        "Result-Code [M]": "Access-Accept (success)",
+        "Framed-IP-Address [O]": "198.51.100.100 (IPv4 allocated by DN-AAA)",
+        "Framed-IPv6-Prefix [O]": "2001:db8::/64 (IPv6 prefix allocated)",
+        "Class [O]": "(opaque state, if any)",
+        "Vendor-Specific [O]": "(e.g., operator-specific policy info)"
+      }
+    }, comment: "TS 29.561 §11.1.1 V16.7.0:contentReference[oaicite:27]{index=27}:contentReference[oaicite:28]{index=28}. The external DN-AAA server verifies the UE’s credentials (e.g., via EAP SIM/AKA) and responds with **Access-Accept** if successful. This confirms the UE is authorized to use the data network. The AAA may also assign an IP address or prefix for the UE’s session (here an IPv4 and/or IPv6 prefix). If the AAA provided an IP, the SMF will use that for the PDU session; otherwise, the SMF or UPF will allocate one from its local pool. With the AAA’s acceptance, any required secondary authentication is complete, and the SMF can proceed with session establishment."
+  },
+
+  { from: "SMF", to: "CHF", label: "17  Nchf_ConvergedCharging_Create (Initial)", info: {
+      header: { api: "Nchf_ConvergedCharging_Create", protocol: "Nchf (HTTP/2)" },
+      payload: {
+        "ChargingDataRequest [M]": {
+          "chargingId": "SMF-CHG-12345",
+          "supi": "001011234567890",
+          "pduSessionId": 10,
+          "pdn": "internet",
+          "gpsi [O]": "(MSISDN if available)",
+          "timeStamp": "2025-08-02T04:32:05Z",
+          "usageReport": "Start",
+          "qosInformation [O]": "(QoS details for charging, e.g. GBR if any)",
+          "servingNetwork": "001-01",
+          "location [O]": "(UE location info)"
+        }
+      }
+    }, comment: "TS 32.255 §5.2.1.3, TS 32.290 §5.3.2.3 V16.4.0:contentReference[oaicite:29]{index=29}:contentReference[oaicite:30]{index=30}. The SMF initiates a charging session with the Charging Function (CHF) by sending a *Charging Data Request (Initial)* for this PDU session. This request includes a unique **Charging ID** for the session and relevant details: the subscriber (SUPI), PDU Session ID, DNN, serving network and timestamp of session start. The SMF indicates this is a session start (usageReport=Start). The CHF will use this to generate or open a charging record (for offline charging) or to reserve credit (for online charging). **QoS and location** can be reported if needed for charging differentiation. This ensures that from the moment of establishment, usage can be accounted for. The SMF will receive a response confirming that charging for the session is in place."
+  },
+
+  { from: "CHF", to: "SMF", label: "18  Nchf_ConvergedCharging_Create Response", info: {
+      header: { api: "Nchf_ConvergedCharging_Create", protocol: "Nchf" },
+      payload: {
+        "Result-Code [M]": "201 Created",
+        "chargingId [M]": "SMF-CHG-12345",
+        "quota [O]": "(if online charging: granted data/time quota)",
+        "triggerEvents [O]": "(e.g., threshold triggers for usage reporting)"
+      }
+    }, comment: "TS 32.255 §5.2.1.3 V16.4.0. The CHF acknowledges the charging session creation:contentReference[oaicite:31]{index=31}:contentReference[oaicite:32]{index=32}. In offline charging, this response simply confirms that the charging record is opened (Result-Code 201 Created). In online charging scenarios, the CHF might also return an initial quota (e.g., data volume or time) that the UE is allowed to use before the SMF must report again:contentReference[oaicite:33]{index=33}:contentReference[oaicite:34]{index=34}. The SMF will apply any received quota by configuring corresponding Usage Reporting rules in the UPF. With policy and charging now established, the SMF can proceed to finalize user-plane setup and inform the UE."
+  },
+
+  { from: "SMF", to: "AMF", label: "19  Namf_Communication_N1N2MessageTransfer Request", info: {
+      header: { api: "Namf_Communication_N1N2MessageTransfer", protocol: "N11 (SMF→AMF)" },
+      payload: {
+        "pduSessionId [M]": 10,
+        "n1MessageContainer [M]": {
+          "nasMessage": "PDU Session Establishment Accept"
+        },
+        "n2InfoContainer [M]": {
+          "PduSessionResourceSetupRequest": {
+            "upfTransportLayerInfo": "I-UPF GTP-U Address & TEID",
+            "QoSFlowSetupRequestList": [
+              { "QoSFlowIndicator": 1, "associatedDRB": "DRB1", "QoSProfile": "(5QI=9, ARP=1)" }
+            ]
+          }
+        },
+        "amfCallbackUri [O]": "(SMF callback for status of N1N2 delivery)"
+      }
+    }, comment: "TS 29.518 §5.2.3.3 V17.12.0:contentReference[oaicite:35]{index=35}. The SMF now has all necessary information (UPF addresses, QoS policy, IP allocation, etc.) and instructs the AMF to deliver two things to the UE/RAN: (1) an N1 NAS message (PDU Session Establishment Accept for the UE), and (2) N2 information for the RAN to set up user-plane resources:contentReference[oaicite:36]{index=36}:contentReference[oaicite:37]{index=37}. The N2 container is an NGAP *PDU Session Resource Setup Request* directed to the gNB, containing the I-UPF (PSA) tunnel endpoint info (IP address and TEID for the GTP-U tunnel) and the list of QoS flows to establish (here the default flow with 5QI=9). The SMF includes the QoS profile and mapping such that the gNB can configure a DRB for this flow. Essentially, this N1N2 transfer bundles the *PDU Session Establishment Accept* for the UE and the *resource setup instructions* for the gNB."
+  },
+
+  { from: "AMF", to: "SMF", label: "20  Namf_Communication_N1N2MessageTransfer Response", info: {
+      header: { api: "Namf_Communication_N1N2MessageTransfer", protocol: "N11 (AMF→SMF)" },
+      payload: {
+        "Status [M]": "Accepted",
+        "RoutingInfo [O]": "(AMF confirms it will route N1 and N2 to the appropriate gNB)",
+        "deliveryStatus [O]": "Buffered (if UE not reachable immediately)"
+      }
+    }, comment: "TS 29.518 §5.2.3.3 V17.12.0. The AMF acknowledges the N1N2 transfer request from SMF. A successful response indicates the AMF has accepted responsibility to deliver the NAS message to the UE and the N2 message to the RAN. At this point, the SMF’s part of control signaling is mostly done; the remaining steps involve the AMF and RAN establishing the RAN-side user plane. The AMF now triggers the NGAP procedure towards the gNB to set up the PDU session resources."
+  },
+
+  { from: "AMF", to: "RAN", label: "21  PDU Session Resource Setup Request (NAS + N2)", info: {
+      header: { msg: "PDU Session Resource Setup Request", protocol: "NGAP" },
+      payload: {
+        "PDU Session ID [M]": 10,
+        "NAS-PDU [M]": "PDU Session Establishment Accept",
+        "UPF GTPTunnel [M]": {
+          "TransportLayerAddress": "<I-UPF GTP-U IP>",
+          "GTP-TEID": "<I-UPF GTP-U TEID>"
+        },
+        "QoSFlowSetupRequestList [M]": [
+           { "QoSFlowIndicator": 1, "UL GTP-TEID": "<I-UPF TEID for UL>", "QoSProfile": "(5QI=9, ARP=1, GBR=N/A)" }
+        ],
+        "SecurityIndication [O]": "(indicates integrity and ciphering for N3)",
+        "PDUSessionType [O]": "IPv4v6"
+      }
+    }, comment: "TS 38.413 §9.2.1.2 V17.0.0:contentReference[oaicite:38]{index=38}. The AMF sends an NGAP **PDU Session Resource Setup Request** to the gNB. This message contains the NAS *PDU Session Establishment Accept* to be delivered to the UE and the details for setting up the user-plane tunnel. It includes the I-UPF’s IP address and **TEID for the downlink GTP-U** (for gNB to use when sending uplink traffic). The gNB is instructed to establish a radio bearer and corresponding NG-U tunnel. The QoSFlowSetupRequestList describes the QoS Flow to set up: here the default flow with its QoS profile, and may include the UL GTP TEID that the I-UPF expects (if the SMF pre-computed one). If not, the gNB will allocate a UL TEID in the next step. The gNB now has all info to configure the radio and transport network for this PDU session."
+  },
+
+  { from: "RAN", to: "UE", label: "22  RRCReconfiguration (DRB Setup & NAS Accept)", info: {
+      header: { msg: "RRCReconfiguration", protocol: "RRC" },
+      payload: {
+        "rrc-TransactionIdentifier [M]": 2,
+        "drb-ToAddModList [M]": [{
+          "drb-Identity": 1,
+          "flowMapping": "QoSFlowIndicator 1 → DRB1"
+        }],
+        "securityConfig [O]": "(UP integrity/ciphering algorithms, if required)",
+        "dedicatedNAS-Message [M]": {
+          "PDU Session Est Accept": {
+            "PDUSessionID": 10,
+            "selectedSSCMode": 1,
+            "PDUSessionType": "IPv4v6",
+            "assignedIPv4 [C]": "198.51.100.100",
+            "assignedIPv6 [C]": "2001:db8::1/64",
+            "sessionAMBR": "DL=2 Gbps, UL=1 Gbps",
+            "defaultQoS": { "5QI":9, "ARP":1 },
+            "NAS-PDU": "(Optional EAP success or PCO info)",
+            "Cause [O]": "Request accepted"
+          }
+        }
+      }
+    }, comment: "TS 38.331 §5.3.5 V17.1.0:contentReference[oaicite:39]{index=39}:contentReference[oaicite:40]{index=40}. The gNB reconfigures the UE’s RRC connection to add a Data Radio Bearer for the new PDU session. It sends **RRC Reconfiguration**, which includes: the setup of **DRB1** mapped to the QoS flow (QFI 1) authorized for this session, and a *Dedicated NAS Message* – the **PDU Session Establishment Accept** for the UE. In the NAS Accept, the UE is informed of the outcome and session parameters: PDU Session ID, the confirmed SSC mode (1), PDU type, and any network-assigned IP addresses (here the AAA provided IPv4/IPv6 are included). The session AMBR and default QoS (5QI 9, ARP 1) are indicated. If any protocol configuration options (PCO) or EAP authentication results need to be conveyed (e.g., DHCP info or that the DN-AAA auth succeeded), they would appear here. Security parameters for user plane (integrity/ciphering) may be provided if required by policy (commonly, 5G UP security is not used for internet APN). The UE, upon receiving this, will configure the new DRB and bind it to the given QoS flow, and recognize the session is now established with the provided IP configuration."
+  },
+
+  { from: "UE", to: "RAN", label: "23  RRCReconfigurationComplete", info: {
+      header: { msg: "RRCReconfigurationComplete", protocol: "RRC" },
+      payload: {
+        "rrc-TransactionIdentifier [M]": 2,
+        "criticalExtensions [M]": "complete"
+      }
+    }, comment: "TS 38.331 §5.3.5 V17.1.0:contentReference[oaicite:41]{index=41}. The UE responds with *RRC Reconfiguration Complete*, acknowledging that it has successfully applied the new radio bearer configuration. The DRB for the PDU session is now up, and the UE has the session’s IP configuration and QoS rules. User plane data transfer can begin following this message. The gNB now knows the UE is ready to send/receive on the new DRB."
+  },
+
+  { from: "RAN", to: "AMF", label: "24  PDU Session Resource Setup Response", info: {
+      header: { msg: "PDU Session Resource Setup Response", protocol: "NGAP" },
+      payload: {
+        "PDU Session ID [M]": 10,
+        "UL GTP Tunnel Info [M]": {
+           "TransportLayerAddress": "<gNB GTP-U IP>",
+           "GTP-TEID": "<gNB-assigned UL TEID>"
+        },
+        "Response Result [M]": "Successful",
+        "QosFlowSetupResponseList [M]": [
+           { "QoSFlowIndicator": 1, "DRB": 1, "Result": "Successful" }
+        ]
+      }
+    }, comment: "TS 38.413 §9.2.1.3 V17.0.0:contentReference[oaicite:42]{index=42}:contentReference[oaicite:43]{index=43}. After configuring the UE, the gNB sends an NGAP *PDU Session Resource Setup Response* to the AMF. It confirms that the requested PDU session resources have been successfully established. The gNB provides the **UL NG-U tunnel endpoint** info – specifically the GTP-U TEID and IP address that the I-UPF/PSA should use for downlink traffic to this UE. (The gNB generated this TEID when setting up the DRB.) The response also indicates each QoS flow was set up (here the default flow) and bound to a DRB. The AMF forwards this information to the SMF (next step) so that the SMF can complete UPF configuration."
+  },
+
+  { from: "AMF", to: "SMF", label: "25  Nsmf_PDUSession_UpdateSMContext Request", info: {
+      header: { api: "Nsmf_PDUSession_UpdateSMContext", protocol: "N11 (AMF→SMF)" },
+      payload: {
+        "pduSessionId [M]": 10,
+        "updateType [M]": "AN Release (ResourceSetupComplete)",
+        "n2SmInfo [M]": {
+          "PduSessionResourceSetupResponse": {
+            "UL Tunnel Info": "<gNB GTP-U IP, TEID>"
+          }
+        },
+        "anType [M]": "3GPP",
+        "cause [O]": "0 (Success)"
+      }
+    }, comment: "TS 29.502 §5.2.2.3 V17.7.0:contentReference[oaicite:44]{index=44}:contentReference[oaicite:45]{index=45}. The AMF informs the SMF that the access network setup is complete. It invokes an *Update SM Context* request, including the **gNB’s UL tunnel endpoint** (so the SMF learns the TEID the gNB assigned for downlink data). This updateType indicates the AN resources are now in place. Essentially, this signals “PDU Session Setup successful in RAN.” The SMF will use the provided gNB tunnel info to finalize UPF rules for downlink and then acknowledge."
+  },
+
+  { from: "SMF", to: "AMF", label: "26  Nsmf_PDUSession_UpdateSMContext Response", info: {
+      header: { api: "Nsmf_PDUSession_UpdateSMContext", protocol: "N11 (SMF→AMF)" },
+      payload: {
+        "Result [M]": "200 OK",
+        "cause [M]": "Request accepted",
+        "N2SmInfo [O]": "(none or confirmation)",
+        "smContextStatus [O]": "ACTIVE"
+      }
+    }, comment: "TS 29.502 §5.2.2.3 V17.7.0. The SMF responds to the AMF, confirming the update. At this point, the SMF and AMF agree that the PDU session is established and active. The SMF has what it needs to finalize user-plane setup (the gNB’s tunnel info) and will ensure the UPF is fully configured for both directions of traffic. The PDU session context in SMF is now marked ACTIVE, meaning the UE can send and receive user data."
+  },
+
+  { from: "SMF", to: "I-UPF/PSA", label: "27  N4 Session Establishment Request (I-UPF)", info: {
+      header: { msg: "PFCP Session Establishment Request", protocol: "N4 (SMF→UPF)" },
+      payload: {
+        "NodeID [M]": "I-UPF_Node_ID (IP or FQDN)",
+        "F-SEID [M]": "SMF’s SEID for this session",
+        "Create PDR [M]": [
+          { "PDR ID": 1, "PDI (match)": "UL (Uplink) from RAN: TEID=<gNB UL TEID>, UE IP any", "FAR ID": 1 },
+          { "PDR ID": 2, "PDI (match)": "DL (Downlink) from core: any to UE IP", "FAR ID": 2 }
+        ],
+        "Create FAR [M]": [
+          { "FAR ID": 1, "Action": "FORWARD", "ForwardingParameters": "Dst=PSA (UPF) GTP-U IP, TEID=<PSA UL TEID>" },
+          { "FAR ID": 2, "Action": "FORWARD", "ForwardingParameters": "Dst=RAN GTP-U IP, TEID=<gNB UL TEID>" }
+        ],
+        "Create QER [O]": "(QoS Enforcement rules if needed for UL/DL rate limiting)",
+        "Release [O]": "(no release, since establishment)"
+      }
+    }, comment: "TS 29.244 (PFCP) V16.4.0:contentReference[oaicite:46]{index=46}. The SMF configures the intermediate UPF (I-UPF) via PFCP. In the **PFCP Session Establishment Request** to I-UPF, it installs Packet Detection Rules (PDRs) and Forwarding Action Rules (FARs) for both uplink and downlink. For **uplink**: a PDR (ID 1) matches any packets coming from the RAN (N3 interface) with the gNB’s UL **TEID** and forwards them (via FAR ID 1) to the anchor PSA UPF’s GTP-U endpoint (destination TEID provided by PSA). For **downlink**: a PDR (ID 2) matches packets coming from the core (N9 from PSA) destined to the UE’s IP; its FAR (ID 2) forwards those to the RAN’s GTP-U endpoint (using the **gNB’s TEID** that was just obtained in step 24). This effectively sets up I-UPF as a relay: forwarding UL traffic to the PSA and DL traffic to the RAN. The SMF’s request includes its own Session ID (F-SEID) and the I-UPF will allocate a local SEID in the response."
+  },
+
+  { from: "I-UPF/PSA", to: "SMF", label: "28  N4 Session Establishment Response (I-UPF)", info: {
+      header: { msg: "PFCP Session Establishment Response", protocol: "N4 (UPF→SMF)" },
+      payload: {
+        "Cause [M]": "Request accepted",
+        "F-SEID [M]": "I-UPF’s SEID for this session",
+        "Created PDR [M]": [
+          { "PDR ID": 1, "Local F-TEID": "<I-UPF DL TEID for PSA>" },
+          { "PDR ID": 2, "Local F-TEID": "<I-UPF UL TEID for RAN>" }
+        ],
+        "LoadControl [O]": "(if any overload control feedback)"
+      }
+    }, comment: "TS 29.244 V16.4.0. The I-UPF acknowledges the session setup. It confirms the rules were installed successfully (**Cause: Accepted**) and provides its own identifiers: an SEID for the session and possibly TEIDs. In particular, the I-UPF may report the GTP-U tunnel IDs it expects on certain interfaces: e.g., the **I-UPF’s TEID for traffic coming from PSA (downlink)** and/or for traffic from RAN (uplink). In our case, the I-UPF now knows to expect downlink packets from PSA with a specific TEID (given by SMF in FAR1) and will forward them to the RAN using FAR2. This response ensures the SMF and I-UPF are synchronized on tunnel endpoints. The intermediate UPF’s part of the path is now configured."
+  },
+
+  { from: "SMF", to: "I-UPF/PSA", label: "29  N4 Session Establishment Request (PSA)", info: {
+      header: { msg: "PFCP Session Establishment Request", protocol: "N4 (SMF→UPF)" },
+      payload: {
+        "NodeID [M]": "PSA_UPF_Node_ID",
+        "F-SEID [M]": "SMF’s SEID (for PSA session)",
+        "Create PDR [M]": [
+          { "PDR ID": 3, "PDI": "UL from I-UPF: TEID=<I-UPF DL TEID>", "FAR ID": 3 },
+          { "PDR ID": 4, "PDI": "DL from DN: UE IP prefix", "FAR ID": 4 }
+        ],
+        "Create FAR [M]": [
+          { "FAR ID": 3, "Action": "FORWARD", "ForwardingParameters": "Dst=DataNetwork (N6)" },
+          { "FAR ID": 4, "Action": "FORWARD", "ForwardingParameters": "Dst=I-UPF GTP-U IP, TEID=<I-UPF DL TEID for DL>" }
+        ],
+        "Create URR [O]": "(usage reporting rules, if any for charging)",
+        "PDU IP Allocation [O]": "198.51.100.100/2001:db8::/64"
+      }
+    }, comment: "TS 29.244 V16.4.0. Next, the SMF configures the PDU Session Anchor UPF (PSA) via PFCP. The PSA is the UPF connected to the Data Network. In the **PFCP Session Establishment Request** to the PSA, the SMF sets up: an **uplink PDR** (ID 3) for packets coming from the I-UPF (N9 interface) identified by the I-UPF’s GTP TEID for this session, which are forwarded (FAR 3) out to the Data Network (N6); and a **downlink PDR** (ID 4) for packets coming from the DN destined to the UE’s IP (match on UE IP prefix), forwarded (FAR 4) to the I-UPF’s GTP-U address with the appropriate TEID (the one the I-UPF expects for downlink). The SMF includes the UE’s IP/PREFIX here for matching (as assigned by the DN-AAA or local pool). It also installs any **URR** (Usage Reporting Rules) needed for charging (to count data for offline charging or enforce online quotas). This PFCP message effectively anchors the session’s traffic at the PSA and connects it to the I-UPF. It also passes the allocated UE IP configuration to the PSA for routing purposes."
+  },
+
+  { from: "I-UPF/PSA", to: "SMF", label: "30  N4 Session Establishment Response (PSA)", info: {
+      header: { msg: "PFCP Session Establishment Response", protocol: "N4 (UPF→SMF)" },
+      payload: {
+        "Cause [M]": "Request accepted",
+        "F-SEID [M]": "PSA UPF’s SEID",
+        "Created PDR [M]": [
+          { "PDR ID": 3, "Local F-TEID": "<PSA UL TEID for I-UPF>" },
+          { "PDR ID": 4, "Local F-TEID": "<PSA DL TEID for I-UPF (if any)>" }
+        ]
+      }
+    }, comment: "TS 29.244 V16.4.0. The PSA UPF responds, confirming the session setup. **Cause: Accepted** indicates the rules were successfully installed. The PSA provides its own SEID and any TEIDs it allocated. For example, it might confirm the TEID it expects from I-UPF for uplink (though the I-UPF’s UL TEID was already known; often the PSA doesn’t need to allocate a new TEID for traffic from I-UPF if it was given one). At this point, the entire end-to-end user plane path is configured: gNB <-> I-UPF <-> PSA <-> Data Network. The SMF’s role in session establishment is complete."
+  },
+
+  { from: "UE", to: "DN", label: "31  First Uplink Data (UE → Network)", info: {
+      header: { msg: "User Data Packet (IPv4/IPv6)", protocol: "GTP-U/N3" },
+      payload: {
+        "Source IP": "UE 198.51.100.100",
+        "Dest IP": "Example Server 203.0.113.5",
+        "Protocol": "TCP/HTTP (example application data)",
+        "Enclosed in GTP-U [M]": {
+          "TEID": "<gNB uses I-UPF UL TEID>",
+          "Tunnel EP": "gNB -> I-UPF"
+        }
+      }
+    }, comment: "Now that the PDU Session is established, the UE can send uplink user data. The first uplink IP packet (e.g., an HTTP request to some server on the Internet) is encapsulated by the gNB into GTP-U using the I-UPF’s uplink TEID. The gNB forwards it to the I-UPF over the N3 interface. The I-UPF receives the GTP-U frame, matches it against the uplink PDR (by TEID), and forwards the IP packet to the PSA UPF. The PSA then routes the packet out on the data network. This first packet may trigger the SMF to send a usage report to the CHF if an “start of traffic” event was configured:contentReference[oaicite:47]{index=47}, but in this flow the data moves transparently. The PDU session is now carrying user traffic."
+  },
+
+  { from: "DN", to: "UE", label: "32  First Downlink Data (Network → UE)", info: {
+      header: { msg: "User Data Packet (IPv4/IPv6)", protocol: "GTP-U/N3" },
+      payload: {
+        "Source IP": "Example Server 203.0.113.5",
+        "Dest IP": "UE 198.51.100.100",
+        "Protocol": "TCP/HTTP",
+        "Enclosed in GTP-U [M]": {
+          "TEID": "<PSA uses I-UPF DL TEID>",
+          "Tunnel EP": "PSA -> I-UPF -> gNB"
+        }
+      }
+    }, comment: "Downlink data for the UE flows from the Data Network to the PSA UPF, and then through the I-UPF to the gNB. For example, the HTTP response from the server (destined to the UE’s IP 198.51.100.100) arrives at the PSA. The PSA matches it to the downlink PDR and encapsulates it in GTP-U with the I-UPF’s downlink TEID, sending it to the I-UPF over N9. The I-UPF then matches that GTP-U (by TEID) to its downlink PDR and forwards the IP packet via GTP-U to the gNB using the gNB’s TEID. The gNB decapsulates and delivers the packet to the UE over the established DRB. At this point, the UE is exchanging data with the network. The PDU Session is fully established and operational."
+  },
+
+  { from: "UE", to: "I-UPF/PSA", label: "33  UE IP Configuration (IPv6 RA/DHCP)", info: {
+      header: { msg: "IPv6 Router Solicitation / DHCP", protocol: "ICMPv6/DHCP" },
+      payload: {
+        "DHCPv4 Request [C]": "If IPv4 address not in Accept, UE may send DHCP Discover",
+        "RouterSolicitation [C]": "UE -> network (to request IPv6 prefix info)",
+        "RouterAdvertisement [C]": "PSA -> UE (contains 2001:db8::/64 prefix, gateway)",
+        "DHCPv6 [C]": "If stateful IPv6, PSA may act as DHCP server"
+      }
+    }, comment: "TS 23.502 §4.3.2.2.5 V17.5.0:contentReference[oaicite:48]{index=48}. Finally, if the session uses IPv6 or if the network requires DHCP for IPv4, the UE performs IP configuration procedures. In this case, the network provided an IPv6 prefix in the Accept, so the UE may send an ICMPv6 **Router Solicitation** to quickly obtain router parameters. The PSA (UPF) or an associated router responds with a **Router Advertisement** providing the prefix **2001:db8::/64** and default gateway. If the IPv4 address was not directly assigned in the Accept, the UE would use DHCPv4 via the UPF to obtain it. Here, the AAA already gave the IPv4 in the Accept, so no DHCPv4 is needed. After this step, the UE’s IP stack is fully configured for both IPv4 and IPv6, and it can use the PDU session to communicate. The PDU Session Establishment procedure is complete."
+  }
+];
+      /* ====== 页面元素 ====== */
+      const headerInner=document.getElementById('header-names-inner');
+      const bodyDiv=document.getElementById('diagram-body');
+      const svg=document.getElementById('diagram');
+      const diagramContainer=document.getElementById('diagram-container');
+      const verticalDivider=document.getElementById('vertical-divider');
+      const viewerWrapper=document.getElementById('viewer-wrapper');
+
+      const rightDetail=document.getElementById('right-detail');
+      const jsonViewer=document.getElementById('json-viewer');
+      const commentViewer=document.getElementById('comment-viewer');
+      const commentContent=document.getElementById('comment-content');
+      const hDivider=document.getElementById('horizontal-divider');
+
+      /* ====== 绘制信令图 ====== */
+      const headerHeight=50;
+      const margin={top:headerHeight,bottom:50,left:100,right:100};
+      const xStep=200,msgSpacing=80;
+      const totalHeight=margin.top+msgSpacing*(messages.length+1)+margin.bottom;
+      const totalWidth=margin.left+xStep*(nodes.length-1)+margin.right;
+      svg.setAttribute('width',totalWidth);
+      svg.setAttribute('height',totalHeight);
+      headerInner.style.width=totalWidth+'px';
+
+      /* X 坐标 */
+      const xs={};
+      nodes.forEach((n,i)=>{
+        const x=margin.left+i*xStep;
+        xs[n]=x;
+        const d=document.createElement('div');
+        d.className='node-name';
+        d.textContent=n;
+        d.style.left=x+'px';
+        headerInner.appendChild(d);
+        const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1',x);line.setAttribute('y1',margin.top);
+        line.setAttribute('x2',x);line.setAttribute('y2',totalHeight-margin.bottom);
+        line.setAttribute('stroke','#aaa');line.setAttribute('stroke-dasharray','4 2');
+        svg.appendChild(line);
+      });
+
+      /* 箭头 marker */
+      const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+      const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+      marker.setAttribute('id','arrow');marker.setAttribute('markerWidth','8');marker.setAttribute('markerHeight','8');
+      marker.setAttribute('refX','6');marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M0,0 L0,6 L6,3 Z');path.setAttribute('fill','#000');
+      marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+
+      /* 渲染消息线条和标签 */
+      messages.forEach((m,i)=>{
+        const y=margin.top+msgSpacing*(i+1);
+        const x1=xs[m.from],x2=xs[m.to];
+        const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1',x1);ln.setAttribute('y1',y);
+        ln.setAttribute('x2',x2);ln.setAttribute('y2',y);
+        ln.setAttribute('stroke','#000');ln.setAttribute('marker-end','url(#arrow)');
+        svg.appendChild(ln);
+        const lbl=document.createElementNS('http://www.w3.org/2000/svg','text');
+        lbl.setAttribute('x',(x1+x2)/2);lbl.setAttribute('y',y-6);
+        lbl.setAttribute('text-anchor','middle');lbl.classList.add('message-label');
+        lbl.textContent=m.label;
+        lbl.addEventListener('click',()=>{
+          renderJSON(m.info,jsonViewer);
+          commentContent.innerHTML=marked.parse(m.comment);
+        });
+        svg.appendChild(lbl);
+      });
+
+      /* ====== JSON 渲染函数 ====== */
+      function renderJSON(obj,container){
+        container.innerHTML='';
+        function walk(k,v,parent){
+          if(v&&typeof v==='object'){
+            const d=document.createElement('details');d.open=true;
+            const s=document.createElement('summary');s.textContent=k;d.appendChild(s);
+            for(const kk in v)walk(kk,v[kk],d);
+            parent.appendChild(d);
+          }else{
+            const div=document.createElement('div');
+            div.textContent=k+': '+v;parent.appendChild(div);
+          }
+        }
+        for(const key in obj)walk(key,obj[key],container);
+      }
+
+      
+      /* ====== 同步水平滚动，保持节点标题与竖线对齐 ===== */
+      bodyDiv.addEventListener('scroll', () => {
+        headerInner.style.transform = `translateX(${-bodyDiv.scrollLeft}px)`;
+      });
+      /* 初始化一次，避免刚加载时错位 */
+      headerInner.style.transform = 'translateX(0px)';
+      /* ====== 右侧面板拖拽 ===== */
+      verticalDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startX=e.clientX,startW=viewerWrapper.offsetWidth;
+        function onMove(ev){viewerWrapper.style.width=(startW-(ev.clientX-startX))+'px';}
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      function initVertical(){const h=rightDetail.clientHeight/2;jsonViewer.style.top='0';jsonViewer.style.height=h+'px';hDivider.style.top=h+'px';commentViewer.style.top=(h+5)+'px';commentViewer.style.height=(h-5)+'px';}
+      initVertical();window.addEventListener('resize',initVertical);
+      hDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startY=e.clientY,startH=jsonViewer.offsetHeight;
+        function onMove(ev){
+          const newH=startH+(ev.clientY-startY);
+          jsonViewer.style.height=newH+'px';hDivider.style.top=newH+'px';
+          commentViewer.style.top=(newH+5)+'px';commentViewer.style.height=(rightDetail.clientHeight-newH-5)+'px';
+        }
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      /* ====== 缩放与平移 ===== */
+      const originalW=totalWidth,originalH=totalHeight;let scale=1;
+      svg.setAttribute('viewBox',`0 0 ${originalW} ${originalH}`);
+
+      /* 拖拽平移（保持功能，不改变指针样式） */
+      let dragging=false,sx=0,sy=0;
+      diagramContainer.addEventListener('mousedown',e=>{
+        dragging=true;sx=e.clientX;sy=e.clientY;e.preventDefault();});
+      document.addEventListener('mousemove',e=>{
+        if(!dragging) return;
+        diagramContainer.scrollLeft-=e.clientX-sx;
+        diagramContainer.scrollTop -=e.clientY-sy;
+        sx=e.clientX;sy=e.clientY;
+      });
+      document.addEventListener('mouseup',()=>{dragging=false;});
+
+      /* 缩放 */
+      diagramContainer.addEventListener('wheel',e=>{
+        if(!e.ctrlKey)return;
+        e.preventDefault();
+        const factor=(Math.abs(e.deltaY)<50)?(e.deltaY<0?1.05:0.95):(e.deltaY<0?1.2:0.8);
+        const newScale=scale*factor;if(newScale<0.1||newScale>10)return;
+        const rect=diagramContainer.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        const contentX=(diagramContainer.scrollLeft+cx)/scale;
+        const contentY=(diagramContainer.scrollTop+cy)/scale;
+        scale=newScale;
+        svg.setAttribute('width',originalW*scale);svg.setAttribute('height',originalH*scale);
+        headerInner.style.width=(originalW*scale)+'px';
+        nodes.forEach((n,i)=>{headerInner.children[i].style.left=((margin.left+i*xStep)*scale)+'px';});
+        diagramContainer.scrollLeft=contentX*scale-cx;
+        diagramContainer.scrollTop =contentY*scale-cy;
+      },{passive:false});
+    });
+  </script>
+
+  <script id="addon-script">
+    document.addEventListener('DOMContentLoaded', function(){
+      const labels = Array.from(document.querySelectorAll('.message-label'));
+      let currentIdx = -1;
+      const select = (idx, viaKey=false) => {
+        if(idx < 0 || idx >= labels.length) return;
+        if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+        currentIdx = idx;
+        const lbl = labels[currentIdx];
+        lbl.classList.add('selected');
+        if(viaKey) {
+          lbl.scrollIntoView({block:'center', inline:'center'});
+        }
+        lbl.dispatchEvent(new Event('click'));
+      };
+      labels.forEach((lbl, idx) => {
+        lbl.addEventListener('click', () => {
+          if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+          currentIdx = idx;
+          lbl.classList.add('selected');
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowDown'){
+          e.preventDefault();
+          select(currentIdx + 1, true);
+        } else if(e.key === 'ArrowUp'){
+          e.preventDefault();
+          select(currentIdx - 1, true);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
