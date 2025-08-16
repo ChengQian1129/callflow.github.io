@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>5GC 信令流程图 - 可调布局 (支持缩放/平移)</title>
+  <style>
+    /* ===== 基础布局 ===== */
+    html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    #container{display:flex;height:100vh;overflow:hidden;}
+
+    /* ===== 左侧信令图容器 =====
+       修复：去掉原先的 cursor:grab; 以免在左侧空白区域出现“小手掌”指针 */
+    #diagram-container{flex:1;position:relative;overflow:hidden;}
+
+    #header-names{position:absolute;top:0;left:0;right:0;height:50px;background:#fff;border-bottom:1px solid #eee;overflow:hidden;pointer-events:none;}
+    #header-names-inner{position:absolute;top:0;left:0;height:100%;}
+    #header-names-inner .node-name{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:14px;color:#333;}
+    #diagram-body{position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;}
+    #diagram{display:block;}
+
+    /* ===== 垂直分隔条 ===== */
+    #vertical-divider{width:5px;background:#ddd;cursor:col-resize;user-select:none;}
+
+    /* ===== 右侧面板 ===== */
+    #viewer-wrapper{width:400px;display:flex;flex-direction:column;overflow:hidden;}
+    #viewer-header{flex:none;padding:10px 12px;background:#f5f5f5;border-bottom:1px solid #ccc;font-weight:bold;}
+
+    /* ===== 右侧上下分区父容器 ===== */
+    #right-detail{position:relative;flex:1;min-height:0;}
+
+    /* ===== 右侧上下内容区 ===== */
+    #json-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #comment-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #json-viewer details{margin-left:12px;margin-bottom:4px;}
+    #json-viewer summary{cursor:pointer;}
+
+    /* ===== 水平分隔条 ===== */
+    #horizontal-divider{
+      position:absolute;left:0;right:0;height:5px;background:#ddd;
+      cursor:row-resize;user-select:none;
+    }
+
+    /* ===== 信令文字标签 ===== */
+    .message-label{cursor:default;}
+    .message-label:hover{fill:#007ACC;}
+
+    #comment-content {
+      max-width: 800px;
+      margin: 0 auto;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    #comment-content code {
+      font-family: Consolas,"Courier New",monospace;
+      background-color: #f5f5f5;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    #comment-content pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+    #comment-content pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+    #comment-content ul, #comment-content ol {
+      margin: 0.5em 0;
+      padding-left: 1.5em;
+    }
+    #comment-content li {
+      margin: 0.2em 0;
+    }
+    #comment-viewer::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #comment-viewer::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+    #comment-viewer::-webkit-scrollbar-track {
+      background-color: #f5f5f5;
+    }
+  </style>
+
+  <style id="addon-style">
+    .message-label.selected{fill:#ff5722;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <!-- 左侧信令图 -->
+    <div id="diagram-container">
+      <div id="header-names"><div id="header-names-inner"></div></div>
+      <div id="diagram-body"><svg id="diagram"></svg></div>
+    </div>
+
+    <!-- 垂直分隔条 -->
+    <div id="vertical-divider"></div>
+
+    <!-- 右侧消息详情 -->
+    <div id="viewer-wrapper">
+      <div id="viewer-header">消息详情</div>
+      <div id="right-detail">
+        <div id="json-viewer">请点击左侧消息查看详情</div>
+        <div id="horizontal-divider"></div>
+        <div id="comment-viewer">
+           <div id="comment-content">请点击左侧消息查看注释</div>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/16.1.1/lib/marked.umd.min.js"></script>
+  <script>
+      document.addEventListener('DOMContentLoaded', () => {
+      /* ====== 数据 ====== */
+const nodes = ["UE","gNB","AMF","SMF","UPF","NRF","AUSF","UDM","UDR","NSSF","PCF","EIR","SMSF","RADIUS","CHF"]; const messages = [ {from: "UE", to: "AMF", label: "1 PDU Session Establishment Request", info: { header: {msg: "PDU Session Establishment Request", protocol: "5GSM/NAS"}, payload: { "extendedProtocolDiscriminator [Mandatory]": "5GS Session Management", "pduSessionId [Mandatory]": 10, "pti [Mandatory]": 1, "messageType [Mandatory]": "PDU Session Establishment Request", "integrityProtectionMaximumDataRate [Mandatory]": "full data rate", "pduSessionType [Mandatory]": "IPv4v6", "sscMode [Mandatory]": 1, "sNSSAI [Optional]": {"sst": 1, "sd": "010203"}, "dnn [Optional]": "internet", "smPduDnRequestContainer [Conditional]": "(EAP payload or additional info for DN authorization if provided)" } }, comment: "- **pduSessionId** [Mandatory]: PDU Session Identifier chosen by the UE for this session.\n- **pti** [Mandatory]: Procedure Transaction ID to match request with response.\n- **integrityProtectionMaximumDataRate** [Mandatory]: Indicates the maximum data rate the UE can support for integrity-protected traffic (here 'full data rate' means no limit):contentReference[oaicite:0]{index=0}.\n- **pduSessionType** [Mandatory]: Requested PDU session type (IPv4, IPv6, IPv4v6, Unstructured, or Ethernet). The UE requests dual stack IPv4v6 connectivity in this case.\n- **sscMode** [Mandatory]: Session and Service Continuity mode (1 = SSC mode 1 for always-on connectivity).\n- **sNSSAI** [Optional]: Single Network Slice Selection Assistance Information identifying the slice (SST=1, SD=010203) for which the PDU session is requested. Included if the PDU session is slice-specific.\n- **dnn** [Optional]: Data Network Name, the network the UE wants to connect to (e.g., 'internet').\n- **smPduDnRequestContainer** [Conditional]: Container for additional data network authorization info (e.g., EAP message or credentials) if required by the network for this DNN:contentReference[oaicite:1]{index=1}." }, {from: "AMF", to: "SMF", label: "2 Nsmf_PDUSession_CreateSMContext Request", info: { http: {method: "POST", uri: "https://smf.example.com/nsmf-pdusession/v1/sm-contexts"}, payload: { "supi": "imsi-001011234567890", "pduSessionId": 10, "dnn": "internet", "sNssai": {"sst": 1, "sd": "010203"}, "requestType": "INITIAL_REQUEST", "n1SmMessage": {"nasMessage": "PDU Session Establishment Request", "payload": "..."} } }, comment: "- **supi**: SUPI (Subscriber Permanent Identifier) of the UE (IMSI in this example).\n- **pduSessionId**: The PDU session ID as provided by the UE for this session (10).\n- **dnn**: Data network name requested (e.g., 'internet').\n- **sNssai**: Requested slice (Single-NSSI) info with SST and SD as provided by the UE.\n- **requestType**: Indicates this is an initial PDU session establishment request (not a handover or existing PDU session).\n- **n1SmMessage**: Container for the NAS SM message from the UE (PDU Session Establishment Request) that the SMF will process." }, {from: "AMF", to: "NRF", label: "3 Nnrf_NFDiscovery Request", info: { http: {method: "GET", uri: "https://nrf.example.com/nnrf-nfm/v1/nf-instances?targetNfType=SMF&requesterNfType=AMF&snssai=1-010203&dnn=internet"} }, comment: "AMF queries the NRF to discover an appropriate SMF for the requested PDU session.\n- **targetNfType**: SMF (looking for Session Management Function).\n- **requesterNfType**: AMF (the querying NF).\n- **snssai**: Slice identifier (SST=1, SD=010203) to find an SMF serving that slice:contentReference[oaicite:2]{index=2}.\n- **dnn**: Data network name to ensure the SMF can serve the requested network." }, {from: "NRF", to: "AMF", label: "4 Nnrf_NFDiscovery Response", info: { payload: { "nfInstances": [ {"nfInstanceId": "SMF1-UUID-1234", "nfType": "SMF", "nfStatus": "REGISTERED", "fqdn": "smf.example.com", "ipv4Addresses": ["10.1.2.3"]} ] } }, comment: "NRF returns SMF instance(s) that match the query.\n- **nfInstances**: List of SMF NF profiles. Here a candidate SMF is provided with its instance ID, FQDN/IP, etc., indicating it is available to serve the request." }, {from: "SMF", to: "UDM", label: "5a Nudm_SubscriberDataManagement_Subscribe Request", info: { http: {method: "POST", uri: "https://udm.example.com/nudm-sdm/v1/ue-subscription-data/{supi}/sm-data/subscription"} }, comment: "SMF subscribes with UDM to receive notifications if the UE's session management subscription data changes (e.g., updated allowed DNNs or slice info). This ensures the SMF stays updated on any relevant subscription modifications for the PDU session." }, {from: "SMF", to: "UDM", label: "5b Nudm_SubscriberDataManagement_Get Request", info: { http: {method: "GET", uri: "https://udm.example.com/nudm-sdm/v1/ue-subscription-data/{supi}/sm-data?dnn=internet&snssai=1-010203"} }, comment: "SMF requests the UE's subscription data from UDM for the specified DNN and slice. This data includes allowed services, session parameters (like default QoS profiles, authorized session AMBR, whether secondary authentication is required, etc.) for the requested PDU session:contentReference[oaicite:3]{index=3}." }, {from: "UDM", to: "SMF", label: "6a Nudm_SubscriberDataManagement_Subscribe Response", info: { http: {status: 201, message: "Created"}, payload: { "subscriptionId": "sub-12345", "udmGroupId": "UDM_Group_1" } }, comment: "UDM confirms the subscription request from SMF.\n- **subscriptionId**: Identifier for the subscription to UDM notifications, which the SMF will use for future reference.\n- **udmGroupId**: (If provided) indicates which UDM group is handling the subscriber, useful for load distribution." }, {from: "UDM", to: "SMF", label: "6b Nudm_SubscriberDataManagement_Get Response", info: { payload: { "smfSelectionSubscriptionData": { "subscribedSnssaiInfos": { "010203": {"dnnInfos": [{"dnn": "internet"}]} } }, "smfSubscriptionData": { "dnnConfigurations": { "internet": { "pduSessionTypes": {"defaultSessionType": "IPV4V6", "allowedSessionTypes": ["IPV4V6"]}, "sscModes": {"defaultSscMode": "SSC_MODE_1", "allowedSscModes": ["SSC_MODE_1"]}, "sessionAmbr": {"uplink": "2 Gbps", "downlink": "2 Gbps"}, "5gQosProfile": {"5qi": 9, "arp": { "priorityLevel": 8, "preemptionCapability": true, "preemptionVulnerability": true }}, "externalDNAuth": true } } } } }, comment: "UDM returns the subscription data for the UE. Key elements include:\n- **allowed S-NSSAIs/DNNs**: Confirms the UE is subscribed to use slice 1-010203 and DNN 'internet'.\n- **pduSessionTypes**: Allowed PDU session types (IPv4v6 permitted as requested).\n- **sscModes**: Allowed Session and Service Continuity modes (SSC mode 1 for this DNN).\n- **sessionAmbr**: The subscribed aggregate maximum bit rate for the session (e.g., 2 Gbps up/down).\n- **5gQosProfile**: Default QoS profile (5QI=9 for default bearer, with allocation/retention priority parameters).\n- **externalDNAuth** [Conditional]: Indicates if additional authentication by an external data network is required for this DNN (true in this case, meaning the network will perform secondary EAP-based authentication for this session)." }, {from: "SMF", to: "AMF", label: "7 Nsmf_PDUSession_CreateSMContext Response", info: { http: {status: 201, message: "Created"}, payload: { "smContextRef": "https://smf.example.com/nsmf-pdusession/v1/sm-contexts/10", "pduSessionId": 10, "selectedUpf": "UPF1", "cause": "CONTINUING_HANDLING" } }, comment: "SMF confirms creation of the SM context for the PDU session.\n- **smContextRef**: Reference to the created SM context resource in the SMF (to be used for subsequent updates).\n- **pduSessionId**: The PDU session ID for which context is created.\n- **selectedUpf**: Identifier of the UPF selected as the PDU Session Anchor.\n- **cause**: 'CONTINUING_HANDLING' indicates the PDU session establishment is in progress (e.g., awaiting secondary authentication) rather than fully complete." }, {from: "SMF", to: "AMF", label: "8 Namf_Communication_N1N2MessageTransfer Request", info: { http: {method: "POST", uri: "https://amf.example.com/namf-comm/v1/ue-contexts/ue-001/n1-n2-messages"}, payload: { "n1MessageContainer": { "nasMessage": "PDU Session Authentication Command", "cause": null }, "n2InfoContainer": null } }, comment: "SMF invokes the AMF's service to deliver an N1 NAS message (and optionally N2 info) to the UE. Here it provides:\n- **n1MessageContainer**: Contains a NAS PDU Session Authentication Command message to be sent to the UE, which carries an EAP request for secondary authentication:contentReference[oaicite:4]{index=4}. (No N2 message is included at this stage since this is purely an NAS-based authentication step.)" }, {from: "AMF", to: "SMF", label: "9 Namf_Communication_N1N2MessageTransfer Response", info: { http: {status: 202, message: "Accepted"} }, comment: "AMF acknowledges the request to forward the NAS message to the UE. A 202 Accepted indicates the AMF has accepted the N1/N2 transfer request and will deliver the PDU Session Authentication Command to the UE." }, {from: "AMF", to: "SMF", label: "10 Nsmf_PDUSession_UpdateSMContext Request", info: { http: {method: "PUT", uri: "https://smf.example.com/nsmf-pdusession/v1/sm-contexts/10"}, payload: { "n2Info": {"status": "PDU_SESSION_AUTH_COMMAND_SENT"} } }, comment: "AMF notifies SMF that the PDU Session Authentication Command has been sent towards the UE. This update lets the SMF know that the secondary authentication process is in progress (the EAP request was delivered)." }, {from: "SMF", to: "AMF", label: "11 Nsmf_PDUSession_UpdateSMContext Response", info: { http: {status: 200, message: "OK"} }, comment: "SMF acknowledges the update from AMF that the authentication command was delivered." }, {from: "AMF", to: "gNB", label: "13 DownlinkNASTransport (PDU Session Authentication Command)", info: { header: {msg: "DownlinkNASTransport", protocol: "NGAP"}, payload: { "ranUeNgapId": 42, "nasPdu": { "messageType": "PDU Session Authentication Command", "eapPayload": "<EAP-Request data>" } } }, comment: "AMF sends a Downlink NAS Transport message to the RAN carrying the PDU Session Authentication Command NAS message for the UE.\n- **ranUeNgapId** [Mandatory]: The RAN-assigned UE NGAP ID to identify the UE over N2.\n- **nasPdu** [Mandatory]: Contains the NAS PDU Session Authentication Command, which includes an EAP payload from the external DN for secondary authentication:contentReference[oaicite:5]{index=5}." }, {from: "UE", to: "gNB", label: "14 ULInformationTransfer (PDU Session Authentication Complete)", info: { header: {msg: "ULInformationTransfer", protocol: "RRC"}, payload: { "rrcTransactionIdentifier": 1, "dedicatedNAS_Message": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response data>" } } }, comment: "UE responds with an RRC UL Information Transfer carrying the NAS **PDU Session Authentication Complete** message. This contains the UE's EAP response to the challenge.\n- **dedicatedNAS_Message** [Optional]: Contains the NAS PDU Session Authentication Complete, including the EAP response from the UE." }, {from: "gNB", to: "AMF", label: "15 UplinkNASTransport (PDU Session Authentication Complete)", info: { header: {msg: "UplinkNASTransport", protocol: "NGAP"}, payload: { "ranUeNgapId": 42, "nasPdu": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response data>" } } }, comment: "The gNB forwards the UE's NAS response to the AMF via an Uplink NAS Transport.\n- **nasPdu** [Mandatory]: Contains the PDU Session Authentication Complete NAS message with the UE's EAP response." }, {from: "AMF", to: "SMF", label: "16 Nsmf_PDUSession_UpdateSMContext Request", info: { http: {method: "PUT", uri: "https://smf.example.com/nsmf-pdusession/v1/sm-contexts/10"}, payload: { "n1SmMsg": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response data>" } } }, comment: "AMF forwards the UE's NAS response to the SMF via the Nsmf UpdateSMContext API. The payload includes the PDU Session Authentication Complete message containing the UE's EAP response." }, {from: "SMF", to: "AMF", label: "17 Nsmf_PDUSession_UpdateSMContext Response", info: { http: {status: 200, message: "OK"} }, comment: "SMF acknowledges receipt of the UE's EAP response. The SMF will now process this response and engage the external AAA server for authentication." }, {from: "SMF", to: "RADIUS", label: "18 Access-Request", info: { radius: { "code": "Access-Request", "identifier": 1, "attributes": { "User-Name": "user@example.com", "NAS-Identifier": "SMF1", "EAP-Message": "<EAP-Response (Identity)>", "Message-Authenticator": "(omitted)" } } }, comment: "The SMF, acting as a RADIUS client, sends an Access-Request to the external AAA server to begin secondary authentication. The request includes: \n- **User-Name** (if available, e.g. an identity from the UE), \n- **EAP-Message**: the EAP payload from the UE's response (or identity) encapsulated in RADIUS.\nThis starts the EAP exchange with the AAA server:contentReference[oaicite:6]{index=6}." }, {from: "RADIUS", to: "SMF", label: "19 Access-Challenge", info: { radius: { "code": "Access-Challenge", "identifier": 1, "attributes": { "EAP-Message": "<EAP-Request (Challenge)>", "State": "0x12345678" } } }, comment: "The AAA server responds with an Access-Challenge, containing an EAP challenge for the UE. The **EAP-Message** carries the challenge (e.g., an EAP-AKA authentication challenge). The **State** attribute is included to maintain session context for the ongoing EAP exchange." }, {from: "SMF", to: "RADIUS", label: "20 Access-Request", info: { radius: { "code": "Access-Request", "identifier": 2, "attributes": { "EAP-Message": "<EAP-Response (Challenge Answer)>", "State": "0x12345678" } } }, comment: "SMF forwards the UE's EAP response to the AAA, sending another Access-Request. It includes the EAP-Response to the challenge and the **State** provided by the server to correlate with the earlier challenge." }, {from: "RADIUS", to: "SMF", label: "21 Access-Challenge", info: { radius: { "code": "Access-Challenge", "identifier": 2, "attributes": { "EAP-Message": "<EAP-Request (Challenge 2)>", "State": "0xabcdef01" } } }, comment: "AAA issues another Access-Challenge with a further EAP request (if the EAP method requires multiple exchanges). A new **State** value may be included to maintain context." }, {from: "SMF", to: "AMF", label: "22 Namf_Communication_N1N2MessageTransfer Request", info: { http: {method: "POST", uri: "https://amf.example.com/namf-comm/v1/ue-contexts/ue-001/n1-n2-messages"}, payload: { "n1MessageContainer": { "nasMessage": "PDU Session Authentication Command", "cause": null }, "n2InfoContainer": null } }, comment: "SMF sends another N1/N2 transfer request to the AMF, carrying a new PDU Session Authentication Command for the UE. This corresponds to the second EAP challenge received from the AAA server." }, {from: "AMF", to: "SMF", label: "23 Namf_Communication_N1N2MessageTransfer Response", info: { http: {status: 202, message: "Accepted"} }, comment: "AMF acknowledges it will forward the second authentication command to the UE." }, {from: "AMF", to: "gNB", label: "24 DownlinkNASTransport (PDU Session Authentication Command)", info: { header: {msg: "DownlinkNASTransport", protocol: "NGAP"}, payload: { "ranUeNgapId": 42, "nasPdu": { "messageType": "PDU Session Authentication Command", "eapPayload": "<EAP-Request (Challenge 2)>" } } }, comment: "AMF sends another Downlink NAS Transport to deliver the second PDU Session Authentication Command (carrying the new EAP challenge) to the UE." }, {from: "UE", to: "gNB", label: "25 ULInformationTransfer (PDU Session Authentication Complete)", info: { header: {msg: "ULInformationTransfer", protocol: "RRC"}, payload: { "rrcTransactionIdentifier": 2, "dedicatedNAS_Message": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response (Challenge 2)>" } } }, comment: "UE responds with another PDU Session Authentication Complete, containing its EAP response to the second challenge." }, {from: "gNB", to: "AMF", label: "26 UplinkNASTransport (PDU Session Authentication Complete)", info: { header: {msg: "UplinkNASTransport", protocol: "NGAP"}, payload: { "ranUeNgapId": 42, "nasPdu": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response (Challenge 2)>" } } }, comment: "The gNB forwards the UE's second EAP response up to the AMF in an Uplink NAS Transport message." }, {from: "AMF", to: "SMF", label: "27 Nsmf_PDUSession_UpdateSMContext Request", info: { http: {method: "PUT", uri: "https://smf.example.com/nsmf-pdusession/v1/sm-contexts/10"}, payload: { "n1SmMsg": { "messageType": "PDU Session Authentication Complete", "eapPayload": "<EAP-Response (Challenge 2)>" } } }, comment: "AMF updates the SMF with the UE's response to the second EAP challenge, via the Nsmf UpdateSMContext request (including the latest EAP response)." }, {from: "SMF", to: "AMF", label: "28 Nsmf_PDUSession_UpdateSMContext Response", info: { http: {status: 200, message: "OK"} }, comment: "SMF acknowledges receipt of the UE's second EAP response." }, {from: "SMF", to: "RADIUS", label: "29 Access-Request", info: { radius: { "code": "Access-Request", "identifier": 3, "attributes": { "EAP-Message": "<EAP-Response (Challenge 2)>", "State": "0xabcdef01" } } }, comment: "SMF sends the UE's second EAP response to the AAA server in another Access-Request, including the latest **State** to continue the authentication exchange." }, {from: "RADIUS", to: "SMF", label: "30 Access-Accept", info: { radius: { "code": "Access-Accept", "identifier": 3, "attributes": { "EAP-Message": "<EAP-Success>", "User-Name": "user@example.com", "Framed-IP-Address": "10.10.0.100" } } }, comment: "The AAA server responds with Access-Accept, indicating successful authentication.\n- **EAP-Message**: Contains an EAP-Success message concluding the EAP exchange.\n- **Framed-IP-Address** [Optional]: An IP address assigned to the UE by the AAA/DN (if applicable, e.g., for certain deployments AAA may provide the IP)." }, {from: "SMF", to: "I-UPF", label: "31 N4 Session Establishment Request (I-UPF)", info: { header: {msg: "N4 Session Establishment Request", protocol: "PFCP"}, payload: { "pdrList": "…", "farList": "…", "sessionQos": "…" } }, comment: "SMF establishes a PFCP session on an intermediate UPF (I-UPF) if one is used (e.g., as a UL CL). This includes provisioning of PDU Session traffic handling rules (PDRs/FARs) on the I-UPF. **[Conditional step: not present if no intermediate UPF is deployed]**" }, {from: "I-UPF", to: "SMF", label: "32 N4 Session Establishment Response (I-UPF)", info: { header: {msg: "N4 Session Establishment Response", protocol: "PFCP"}, payload: { "cause": "Request accepted" } }, comment: "The intermediate UPF responds to SMF, confirming the PFCP session establishment. **[Conditional]**" }, {from: "SMF", to: "UPF", label: "33 N4 Session Establishment Request (UPF)", info: { header: {msg: "N4 Session Establishment Request", protocol: "PFCP"}, payload: { "pduSessionId": 10, "outerHeaderCreation": {"teid": "0xABCD1234", "gtpuAddr": "192.0.2.1"}, "pdrList": [ {"id": 1, "farId": 1, "srcIface": "Access", "ueIp": "10.10.0.100/32", "networkInstance": "internet"} ], "farList": [ {"id": 1, "dstIface": "Access", "tunnelInfo": {"teid": "0x1234ABCD", "gtpuAddr": "203.0.113.5"}} ] } }, comment: "SMF sends a PFCP Session Establishment Request to the PDU Session Anchor UPF to allocate resources for the new session. Key provisions include: \n- Allocating a GTP-U Tunnel Endpoint for downlink (UPF->RAN) with a TEID and IP (outerHeaderCreation).\n- Setting up PDRs (Packet Detection Rules) for uplink traffic from the UE (matching on UE IP 10.10.0.100 and DNN 'internet').\n- Setting up FARs (Forwarding Action Rules) for directing traffic (e.g., FAR with tunnel info for downlink to RAN, using the gNB's GTP-U tunnel parameters once known)." }, {from: "UPF", to: "SMF", label: "34 N4 Session Establishment Response (UPF)", info: { header: {msg: "N4 Session Establishment Response", protocol: "PFCP"}, payload: { "cause": "Request accepted", "allocatedIpAddress": "10.10.0.100" } }, comment: "The UPF confirms the session establishment. It may also provide the allocated IP address for the UE's PDU session if the UPF is responsible for IP allocation (here 10.10.0.100)." }, {from: "SMF", to: "NRF", label: "35 Nnrf_NFDiscovery Request", info: { http: {method: "GET", uri: "https://nrf.example.com/nnrf-nfm/v1/nf-instances?targetNfType=CHF&requesterNfType=SMF"} }, comment: "SMF queries NRF to find a Charging Function (CHF) for online charging interactions." }, {from: "NRF", to: "SMF", label: "36 Nnrf_NFDiscovery Response", info: { payload: { "nfInstances": [ {"nfInstanceId": "CHF1-UUID-5678", "nfType": "CHF", "nfStatus": "REGISTERED", "fqdn": "chf.example.com"} ] } }, comment: "NRF returns the available CHF instance for charging." }, {from: "SMF", to: "CHF", label: "37 Charging Data Request (Online)", info: { http: {method: "POST", uri: "https://chf.example.com/nchf-convergedcharging/v1/sessions"}, payload: { "supi": "imsi-001011234567890", "pdnSessionId": 10, "request": {"type": "START", "serviceId": "data", "volume": 0} } }, comment: "SMF initiates an online charging session with the CHF. This request (analogous to a Credit Control Request - Initial) informs the CHF of the new PDU session (including subscriber and session identifiers). The CHF will reserve credit for the session." }, {from: "CHF", to: "SMF", label: "38 Charging Data Response (Online)", info: { http: {status: 201, message: "Created"}, payload: { "sessionId": "chf-session-9999", "grantedUnits": {"totalVolume": 1000000000} } }, comment: "CHF responds, confirming the charging session establishment and granting an initial quota (if applicable) for the PDU session." }, {from: "SMF", to: "PCF", label: "39 Npcf_SMPolicyControl_Create Request", info: { http: {method: "POST", uri: "https://pcf.example.com/npcf-smpolicycontrol/v1/sm-policies"}, payload: { "supi": "imsi-001011234567890", "pduSessionId": 10, "dnn": "internet", "sNssai": {"sst": 1, "sd": "010203"}, "notificationUri": "https://smf.example.com/notify/sm-policy" } }, comment: "SMF requests the PCF to create a Session Management policy for the new PDU session. It provides subscriber ID, session ID, DNN, S-NSSAI, and a callback URI for policy updates." }, {from: "PCF", to: "SMF", label: "40 Npcf_SMPolicyControl_Create Response", info: { payload: { "smPolicyId": "pol-12345", "policyRules": [ {"qosRuleId": 1, "flowStatus": "ENABLED", "5qi": 9, "priorityLevel": 8} ] } }, comment: "PCF confirms creation of the SM Policy. It provides a policy identifier and initial set of policy/QoS rules for the session (e.g., default QoS rule with 5QI=9 for best-effort traffic)." }, {from: "SMF", to: "RADIUS", label: "41 Accounting-Request (Start)", info: { radius: { "code": "Accounting-Request", "identifier": 1, "attributes": { "Acct-Status-Type": "Start", "User-Name": "user@example.com", "Acct-Session-Id": "session-0010", "Framed-IP-Address": "10.10.0.100" } } }, comment: "SMF sends a RADIUS Accounting-Request to indicate the start of the PDU session for offline charging/logging purposes. Contains session identification and user/network info." }, {from: "RADIUS", to: "SMF", label: "42 Accounting-Response (Start)", info: { radius: { "code": "Accounting-Response", "identifier": 1, "attributes": {} } }, comment: "AAA acknowledges the accounting start record." }, {from: "SMF", to: "AMF", label: "43 Namf_Communication_N1N2MessageTransfer Request", info: { http: {method: "POST", uri: "https://amf.example.com/namf-comm/v1/ue-contexts/ue-001/n1-n2-messages"}, payload: { "n1MessageContainer": { "nasMessage": "PDU Session Establishment Accept" }, "n2InfoContainer": { "ngapMessage": "PDU Session Resource Setup Request", "upTransportLayerInfo": {"gtpTunnel": {"teid": "0xABCD1234", "endPointIp": "192.0.2.1"}} } } }, comment: "SMF provides the AMF with both an N1 NAS message (PDU Session Establishment Accept for the UE) and N2 information for RAN (to setup the user plane). The N2 info includes the UPF tunnel details (TEID and IP of UPF) for the downlink GTP-U tunnel to be configured at the gNB." }, {from: "AMF", to: "SMF", label: "44 Namf_Communication_N1N2MessageTransfer Response", info: { http: {status: 202, message: "Accepted"} }, comment: "AMF acknowledges the request to send PDU Session Establishment Accept and N2 setup to the gNB/UE." }, {from: "AMF", to: "gNB", label: "45 PDU Session Resource Setup Request", info: { header: {msg: "PDU Session Resource Setup Request", protocol: "NGAP"}, payload: { "pduSessionId": 10, "nasPdu": { "messageType": "PDU Session Establishment Accept", "pduAddress": "10.10.0.100" }, "uplinkTunnelInfo": {"teid": "0x1234ABCD", "gtpuAddr": "203.0.113.5"}, "qosFlows": [{"qfi": 9, "fiveQi": 9, "priorityLevel": 8}] } }, comment: "AMF commands the gNB to set up radio bearers for the PDU session via the NGAP PDU Session Resource Setup Request. It carries: \n- The NAS **PDU Session Establishment Accept** to be delivered to the UE (including the assigned **PDU address** 10.10.0.100).\n- Downlink tunnel info for the gNB (UPF GTP-U IP and TEID for downlink).\n- QoS flow parameters (e.g., default flow with 5QI 9)." }, {from: "gNB", to: "UE", label: "46 RRC Reconfiguration", info: { header: {msg: "RRCReconfiguration", protocol: "RRC"}, payload: { "rrcTransactionIdentifier": 3, "drb-ToAddModList": [ {"drb-Identity": 1, "qoSFlowLevelQoSParameters": {"5QI": 9}} ], "dedicatedNAS_Message": { "messageType": "PDU Session Establishment Accept", "pduAddress": "10.10.0.100" } } }, comment: "The gNB reconfigures the UE's RAN connection, establishing a Data Radio Bearer for the new PDU session.\n- **drb-ToAddModList**: Configures a new DRB (with an identifier, QoS parameters mapping to the 5QI 9 default flow).\n- **dedicatedNAS_Message** [Optional]: Embedded NAS PDU Session Establishment Accept is delivered to the UE, confirming the session and providing the assigned IP address." }, {from: "UE", to: "gNB", label: "47 RRC Reconfiguration Complete", info: { header: {msg: "RRCReconfigurationComplete", protocol: "RRC"}, payload: { "rrcTransactionIdentifier": 3 } }, comment: "UE confirms the RRC reconfiguration, indicating that the DRB for the PDU session is successfully established." }, {from: "gNB", to: "AMF", label: "48 PDU Session Resource Setup Response", info: { header: {msg: "PDU Session Resource Setup Response", protocol: "NGAP"}, payload: { "pduSessionId": 10, "pduSessionResourceSetupResponseTransfer": { "ulGtpuTunnel": {"teid": "0x1234ABCD", "gtpuAddr": "203.0.113.5"}, "resourceSetupStatus": "SUCCESS" } } }, comment: "The gNB notifies the AMF that the PDU session resource setup is complete. It includes the UL GTP-U tunnel endpoint info (TEID and gNB's IP) for the session and indicates success." }, {from: "UE", to: "UPF", label: "49 First Uplink Data", info: { header: {msg: "User Data", protocol: "GTP-U"}, payload: { "sourceIP": "10.10.0.100", "destination": "Internet", "application": "Initial user data packet" } }, comment: "The UE can now send uplink user data over the established PDU session (e.g., an initial IP packet to the internet). This user data is encapsulated and forwarded by the gNB to the UPF via the newly established GTP-U tunnel." }, {from: "AMF", to: "SMF", label: "50 Nsmf_PDUSession_UpdateSMContext Request", info: { http: {method: "PUT", uri: "https://smf.example.com/nsmf-pdusession/v1/sm-contexts/10"}, payload: { "n2SmInfo": { "pduSessionId": 10, "ulTunnelInfo": {"teid": "0x1234ABCD", "gtpuAddr": "203.0.113.5"}, "setupResult": "SUCCESS" } } }, comment: "AMF informs the SMF that the radio bearer setup is complete and provides the gNB's uplink tunnel endpoint (TEID and IP). The SMF can now finalize the session context with all necessary user-plane information." }, {from: "SMF", to: "PCF", label: "51 Npcf_SMPolicyControl_Update Request", info: { http: {method: "PUT", uri: "https://pcf.example.com/npcf-smpolicycontrol/v1/sm-policies/pol-12345"}, payload: { "report": {"urn:3gpp:traffic:upStatus": "ACTIVE"} } }, comment: "SMF updates the PCF on the session status (e.g., informing that the PDU session is now active and user plane established)." }, {from: "PCF", to: "SMF", label: "52 Npcf_SMPolicyControl_Update Response", info: { http: {status: 200, message: "OK"} }, comment: "PCF acknowledges the policy update." }, {from: "SMF", to: "NRF", label: "53 Nnrf_NFDiscovery Request", info: { http: {method: "GET", uri: "https://nrf.example.com/nnrf-nfm/v1/nf-instances?targetNfType=AMF&serviceNames=namf-evtsub&requesterNfType=SMF"} }, comment: "SMF performs NF discovery to find the AMF's Event Exposure service (to subscribe to relevant events such as UE mobility or disconnection)." }, {from: "NRF", to: "SMF", label: "54 Nnrf_NFDiscovery Response", info: { payload: { "nfInstances": [ {"nfInstanceId": "AMF1", "nfType": "AMF", "services": [{"name": "namf-evtsub", "apiPrefix": "https://amf.example.com/namf-evtsub/v1"}]} ] } }, comment: "NRF returns information about the AMF's Event Exposure service (API endpoint for event subscriptions)." }, {from: "SMF", to: "AMF", label: "55 Namf_EventExposure_Subscribe Request", info: { http: {method: "POST", uri: "https://amf.example.com/namf-evtsub/v1/subscriptions"}, payload: { "event": "UE_LOST_CONNECTION", "pduSessionId": 10, "notificationUri": "https://smf.example.com/event-notify" } }, comment: "SMF subscribes to AMF events (via Namf Event Exposure) to get notified if relevant events occur, such as the UE becoming unreachable or the session being released by the UE." }, {from: "AMF", to: "SMF", label: "56 Namf_EventExposure_Subscribe Response", info: { http: {status: 201, message: "Created"}, payload: {"subscriptionId": "sub-evt-0001"} }, comment: "AMF confirms the event exposure subscription. SMF will be notified on the provided callback if the subscribed event occurs." }, {from: "UPF", to: "UE", label: "57 PDU Address Configuration", info: { header: {msg: "IP Address Configuration", protocol: "ICMPv6/DHCP"}, payload: { "assignedIpv4": "10.10.0.100", "assignedIpv6Prefix": "2001:db8::/64" } }, comment: "The UE obtains its IP configuration for the PDU session. This may occur via a DHCP procedure for IPv4 and/or IPv6, or by receiving a Router Advertisement for IPv6 addressing. In this scenario, the UE is assigned IPv4 10.10.0.100 (which was also provided in the Accept) and possibly an IPv6 prefix." }, {from: "SMF", to: "AMF", label: "58 Nsmf_PDUSession_UpdateSMContext Response", info: { http: {status: 200, message: "OK"} }, comment: "SMF confirms the final update from the AMF. The UE's PDU Session Establishment with EAP-based authentication is now complete." } ]; 
+      /* ====== 页面元素 ====== */
+      const headerInner=document.getElementById('header-names-inner');
+      const bodyDiv=document.getElementById('diagram-body');
+      const svg=document.getElementById('diagram');
+      const diagramContainer=document.getElementById('diagram-container');
+      const verticalDivider=document.getElementById('vertical-divider');
+      const viewerWrapper=document.getElementById('viewer-wrapper');
+
+      const rightDetail=document.getElementById('right-detail');
+      const jsonViewer=document.getElementById('json-viewer');
+      const commentViewer=document.getElementById('comment-viewer');
+      const commentContent=document.getElementById('comment-content');
+      const hDivider=document.getElementById('horizontal-divider');
+
+      /* ====== 绘制信令图 ====== */
+      const headerHeight=50;
+      const margin={top:headerHeight,bottom:50,left:100,right:100};
+      const xStep=200,msgSpacing=80;
+      const totalHeight=margin.top+msgSpacing*(messages.length+1)+margin.bottom;
+      const totalWidth=margin.left+xStep*(nodes.length-1)+margin.right;
+      svg.setAttribute('width',totalWidth);
+      svg.setAttribute('height',totalHeight);
+      headerInner.style.width=totalWidth+'px';
+
+      /* X 坐标 */
+      const xs={};
+      nodes.forEach((n,i)=>{
+        const x=margin.left+i*xStep;
+        xs[n]=x;
+        const d=document.createElement('div');
+        d.className='node-name';
+        d.textContent=n;
+        d.style.left=x+'px';
+        headerInner.appendChild(d);
+        const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1',x);line.setAttribute('y1',margin.top);
+        line.setAttribute('x2',x);line.setAttribute('y2',totalHeight-margin.bottom);
+        line.setAttribute('stroke','#aaa');line.setAttribute('stroke-dasharray','4 2');
+        svg.appendChild(line);
+      });
+
+      /* 箭头 marker */
+      const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+      const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+      marker.setAttribute('id','arrow');marker.setAttribute('markerWidth','8');marker.setAttribute('markerHeight','8');
+      marker.setAttribute('refX','6');marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M0,0 L0,6 L6,3 Z');path.setAttribute('fill','#000');
+      marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+
+      /* 渲染消息线条和标签 */
+      messages.forEach((m,i)=>{
+        const y=margin.top+msgSpacing*(i+1);
+        const x1=xs[m.from],x2=xs[m.to];
+        const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1',x1);ln.setAttribute('y1',y);
+        ln.setAttribute('x2',x2);ln.setAttribute('y2',y);
+        ln.setAttribute('stroke','#000');ln.setAttribute('marker-end','url(#arrow)');
+        svg.appendChild(ln);
+        const lbl=document.createElementNS('http://www.w3.org/2000/svg','text');
+        lbl.setAttribute('x',(x1+x2)/2);lbl.setAttribute('y',y-6);
+        lbl.setAttribute('text-anchor','middle');lbl.classList.add('message-label');
+        lbl.textContent=m.label;
+        lbl.addEventListener('click',()=>{
+          renderJSON(m.info,jsonViewer);
+          commentContent.innerHTML=marked.parse(m.comment);
+        });
+        svg.appendChild(lbl);
+      });
+
+      /* ====== JSON 渲染函数 ====== */
+      function renderJSON(obj,container){
+        container.innerHTML='';
+        function walk(k,v,parent){
+          if(v&&typeof v==='object'){
+            const d=document.createElement('details');d.open=true;
+            const s=document.createElement('summary');s.textContent=k;d.appendChild(s);
+            for(const kk in v)walk(kk,v[kk],d);
+            parent.appendChild(d);
+          }else{
+            const div=document.createElement('div');
+            div.textContent=k+': '+v;parent.appendChild(div);
+          }
+        }
+        for(const key in obj)walk(key,obj[key],container);
+      }
+
+      
+      /* ====== 同步水平滚动，保持节点标题与竖线对齐 ===== */
+      bodyDiv.addEventListener('scroll', () => {
+        headerInner.style.transform = `translateX(${-bodyDiv.scrollLeft}px)`;
+      });
+      /* 初始化一次，避免刚加载时错位 */
+      headerInner.style.transform = 'translateX(0px)';
+      /* ====== 右侧面板拖拽 ===== */
+      verticalDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startX=e.clientX,startW=viewerWrapper.offsetWidth;
+        function onMove(ev){viewerWrapper.style.width=(startW-(ev.clientX-startX))+'px';}
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      function initVertical(){const h=rightDetail.clientHeight/2;jsonViewer.style.top='0';jsonViewer.style.height=h+'px';hDivider.style.top=h+'px';commentViewer.style.top=(h+5)+'px';commentViewer.style.height=(h-5)+'px';}
+      initVertical();window.addEventListener('resize',initVertical);
+      hDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startY=e.clientY,startH=jsonViewer.offsetHeight;
+        function onMove(ev){
+          const newH=startH+(ev.clientY-startY);
+          jsonViewer.style.height=newH+'px';hDivider.style.top=newH+'px';
+          commentViewer.style.top=(newH+5)+'px';commentViewer.style.height=(rightDetail.clientHeight-newH-5)+'px';
+        }
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      /* ====== 缩放与平移 ===== */
+      const originalW=totalWidth,originalH=totalHeight;let scale=1;
+      svg.setAttribute('viewBox',`0 0 ${originalW} ${originalH}`);
+
+      /* 拖拽平移（保持功能，不改变指针样式） */
+      let dragging=false,sx=0,sy=0;
+      diagramContainer.addEventListener('mousedown',e=>{
+        dragging=true;sx=e.clientX;sy=e.clientY;e.preventDefault();});
+      document.addEventListener('mousemove',e=>{
+        if(!dragging) return;
+        diagramContainer.scrollLeft-=e.clientX-sx;
+        diagramContainer.scrollTop -=e.clientY-sy;
+        sx=e.clientX;sy=e.clientY;
+      });
+      document.addEventListener('mouseup',()=>{dragging=false;});
+
+      /* 缩放 */
+      diagramContainer.addEventListener('wheel',e=>{
+        if(!e.ctrlKey)return;
+        e.preventDefault();
+        const factor=(Math.abs(e.deltaY)<50)?(e.deltaY<0?1.05:0.95):(e.deltaY<0?1.2:0.8);
+        const newScale=scale*factor;if(newScale<0.1||newScale>10)return;
+        const rect=diagramContainer.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        const contentX=(diagramContainer.scrollLeft+cx)/scale;
+        const contentY=(diagramContainer.scrollTop+cy)/scale;
+        scale=newScale;
+        svg.setAttribute('width',originalW*scale);svg.setAttribute('height',originalH*scale);
+        headerInner.style.width=(originalW*scale)+'px';
+        nodes.forEach((n,i)=>{headerInner.children[i].style.left=((margin.left+i*xStep)*scale)+'px';});
+        diagramContainer.scrollLeft=contentX*scale-cx;
+        diagramContainer.scrollTop =contentY*scale-cy;
+      },{passive:false});
+    });
+  </script>
+
+  <script id="addon-script">
+    document.addEventListener('DOMContentLoaded', function(){
+      const labels = Array.from(document.querySelectorAll('.message-label'));
+      let currentIdx = -1;
+      const select = (idx, viaKey=false) => {
+        if(idx < 0 || idx >= labels.length) return;
+        if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+        currentIdx = idx;
+        const lbl = labels[currentIdx];
+        lbl.classList.add('selected');
+        if(viaKey) {
+          lbl.scrollIntoView({block:'center', inline:'center'});
+        }
+        lbl.dispatchEvent(new Event('click'));
+      };
+      labels.forEach((lbl, idx) => {
+        lbl.addEventListener('click', () => {
+          if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+          currentIdx = idx;
+          lbl.classList.add('selected');
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowDown'){
+          e.preventDefault();
+          select(currentIdx + 1, true);
+        } else if(e.key === 'ArrowUp'){
+          e.preventDefault();
+          select(currentIdx - 1, true);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
