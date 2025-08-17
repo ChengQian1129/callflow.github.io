@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>5GC 信令流程图 - 可调布局 (支持缩放/平移)</title>
+  <style>
+    /* ===== 基础布局 ===== */
+    html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+    #container{display:flex;height:100vh;overflow:hidden;}
+
+    /* ===== 左侧信令图容器 =====
+       修复：去掉原先的 cursor:grab; 以免在左侧空白区域出现“小手掌”指针 */
+    #diagram-container{flex:1;position:relative;overflow:hidden;}
+
+    #header-names{position:absolute;top:0;left:0;right:0;height:50px;background:#fff;border-bottom:1px solid #eee;overflow:hidden;pointer-events:none;}
+    #header-names-inner{position:absolute;top:0;left:0;height:100%;}
+    #header-names-inner .node-name{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:14px;color:#333;}
+    #diagram-body{position:absolute;top:50px;bottom:0;left:0;right:0;overflow:auto;}
+    #diagram{display:block;}
+
+    /* ===== 垂直分隔条 ===== */
+    #vertical-divider{width:5px;background:#ddd;cursor:col-resize;user-select:none;}
+
+    /* ===== 右侧面板 ===== */
+    #viewer-wrapper{width:400px;display:flex;flex-direction:column;overflow:hidden;}
+    #viewer-header{flex:none;padding:10px 12px;background:#f5f5f5;border-bottom:1px solid #ccc;font-weight:bold;}
+
+    /* ===== 右侧上下分区父容器 ===== */
+    #right-detail{position:relative;flex:1;min-height:0;}
+
+    /* ===== 右侧上下内容区 ===== */
+    #json-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #comment-viewer {
+      position:absolute;left:0;right:0;
+      padding:10px;font-size:14px;line-height:1.4;
+      overflow-y:auto;box-sizing:border-box;
+    }
+    #json-viewer details{margin-left:12px;margin-bottom:4px;}
+    #json-viewer summary{cursor:pointer;}
+
+    /* ===== 水平分隔条 ===== */
+    #horizontal-divider{
+      position:absolute;left:0;right:0;height:5px;background:#ddd;
+      cursor:row-resize;user-select:none;
+    }
+
+    /* ===== 信令文字标签 ===== */
+    .message-label{cursor:default;}
+    .message-label:hover{fill:#007ACC;}
+
+    #comment-content {
+      max-width: 800px;
+      margin: 0 auto;
+      word-wrap: break-word;
+      overflow-wrap: break-word;
+    }
+    #comment-content code {
+      font-family: Consolas,"Courier New",monospace;
+      background-color: #f5f5f5;
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+    #comment-content pre code {
+      background-color: transparent;
+      padding: 0;
+    }
+    #comment-content pre {
+      background-color: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+    #comment-content ul, #comment-content ol {
+      margin: 0.5em 0;
+      padding-left: 1.5em;
+    }
+    #comment-content li {
+      margin: 0.2em 0;
+    }
+    #comment-viewer::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    #comment-viewer::-webkit-scrollbar-thumb {
+      background-color: rgba(0,0,0,0.3);
+      border-radius: 4px;
+    }
+    #comment-viewer::-webkit-scrollbar-track {
+      background-color: #f5f5f5;
+    }
+  </style>
+
+  <style id="addon-style">
+    .message-label.selected{fill:#ff5722;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <!-- 左侧信令图 -->
+    <div id="diagram-container">
+      <div id="header-names"><div id="header-names-inner"></div></div>
+      <div id="diagram-body"><svg id="diagram"></svg></div>
+    </div>
+
+    <!-- 垂直分隔条 -->
+    <div id="vertical-divider"></div>
+
+    <!-- 右侧消息详情 -->
+    <div id="viewer-wrapper">
+      <div id="viewer-header">消息详情</div>
+      <div id="right-detail">
+        <div id="json-viewer">请点击左侧消息查看详情</div>
+        <div id="horizontal-divider"></div>
+        <div id="comment-viewer">
+           <div id="comment-content">请点击左侧消息查看注释</div>
+         </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/16.1.1/lib/marked.umd.min.js"></script>
+  <script>
+      document.addEventListener('DOMContentLoaded', () => {
+      /* ====== 数据 ====== */
+    const nodes = ["UE", "gNB", "AMF", "SMF", "UPF", "NRF", "AUSF", "UDM", "UDR", "NSSF", "PCF", "EIR", "SMSF", "RADIUS", "CHF"];
+    const messages = [
+        {from: "PCF", to: "SMF", label: "1a Npcf_SMPolicyControl_UpdateNotify Request", info: {
+            header: {msg: "Npcf_SMPolicyControl_UpdateNotify Request", protocol: "HTTP (N7 PCF-SMF)"},
+            payload: {
+                "Policy Control Request Trigger [Mandatory]": "Indicates reason for policy update (e.g., AF request for QoS):contentReference[oaicite:0]{index=0}",
+                "PCC Rule Updates [Conditional]": "New or modified PCC rules with QoS parameters to apply to the PDU Session:contentReference[oaicite:1]{index=1}"
+            }
+        }, comment: "PCF notifies SMF of updated session management policy (e.g., to add a new QoS flow) per **TS 23.502 §4.3.3.2** (Rel-18):contentReference[oaicite:2]{index=2}. The PCF sends an **HTTP POST** to the SMF’s policy callback (resource URI ending in '/update') with the updated policy information (PCC rules/QoS changes). This triggers the network-initiated PDU Session modification. The SMF responds with HTTP 204 (No Content) acknowledging the notification:contentReference[oaicite:3]{index=3}."
+        },
+        {from: "UDM", to: "SMF", label: "1b Nudm_SubscriberDataManagement_Notification Request", info: {
+            header: {msg: "Nudm_SDM_Notification Request", protocol: "HTTP (Nudm)"},
+            payload: {
+                "Subscription Data Change Type [Mandatory]": "Indicates what subscriber data has changed (e.g., updated QoS profile)",
+                "Updated Subscribed QoS Profile [Conditional]": "New QoS profile or subscribed parameters that have been modified",
+                "DNN Information [Conditional]": "Updated data network (APN/DNN) subscription info if relevant"
+            }
+        }, comment: "UDM notifies SMF of a change in subscriber session management data (e.g., updated subscribed QoS or AMBR):contentReference[oaicite:4]{index=4}. The UDM invokes an **HTTP POST** to the SMF’s subscriber data notification callback URI (provided during subscription), including the changed data. This corresponds to the *Session Management Subscriber Data Update Notification* procedure in **TS 23.502 §4.5.2**:contentReference[oaicite:5]{index=5}. The SMF responds with HTTP 204 (No Content) to acknowledge receipt of the notification."
+        },
+        {from: "SMF", to: "PCF", label: "2a Npcf_SMPolicyControl_UpdateNotify Response", info: {
+            header: {msg: "Npcf_SMPolicyControl_UpdateNotify Response", protocol: "HTTP"},
+            payload: {
+                "HTTP Status [Mandatory]": "204 No Content – SMF successfully received the policy update notification"
+            }
+        }, comment: "SMF acknowledges the PCF’s policy update notification with an HTTP **204 No Content** response, indicating the policy update was received and will be acted upon:contentReference[oaicite:6]{index=6}."
+        },
+        {from: "SMF", to: "UDM", label: "2b Nudm_SubscriberDataManagement_Notification Response", info: {
+            header: {msg: "Nudm_SDM_Notification Response", protocol: "HTTP"},
+            payload: {
+                "HTTP Status [Mandatory]": "204 No Content – SMF successfully received the subscriber data change notification"
+            }
+        }, comment: "SMF sends an HTTP **204 No Content** response to UDM to confirm successful receipt of the subscriber data update notification, as specified by the Nudm service (no response body is needed)."
+        },
+        {from: "SMF", to: "PCF", label: "3 Npcf_SMPolicyControl_Update Request", info: {
+            header: {msg: "Npcf_SMPolicyControl_Update Request", protocol: "HTTP (N7 PCF-SMF)"},
+            payload: {
+                "Policy Association ID [Mandatory]": "Identifier of the SM Policy association to be updated (identifying the PDU session's policy)",
+                "SMF Reported Event [Mandatory]": "Indicates the event prompting update (e.g., subscriber data change or QoS modification)",
+                "Updated Usage/QoS Info [Conditional]": "Any usage reports or QoS parameters SMF provides to PCF (if required for policy decision)"
+            }
+        }, comment: "SMF requests a policy update from PCF (if needed) after processing the notifications. For example, upon receiving new subscriber data from UDM, the SMF may invoke **Npcf_SMPolicyControl_Update** to retrieve or confirm the final policy (updated QoS rules or charging instructions):contentReference[oaicite:7]{index=7}. The SMF’s HTTP PUT/POST includes the PDU Session ID and details of the triggered event so that PCF can re-evaluate policies. This aligns with policy re-evaluation steps in **TS 23.502 §4.3.3.2**."
+        },
+        {from: "PCF", to: "SMF", label: "4 Npcf_SMPolicyControl_Update Response", info: {
+            header: {msg: "Npcf_SMPolicyControl_Update Response", protocol: "HTTP"},
+            payload: {
+                "Updated SM Policy Decision [Mandatory]": "Updated policy information (e.g. authorized QoS rules, charging instructions)",
+                "Policy Control Request Triggers [Optional]": "Any updated triggers for future notifications",
+                "HTTP Status [Mandatory]": "200 OK – PCF successfully processed the update and returned new policy data"
+            }
+        }, comment: "PCF responds to the SMF’s policy update request with a **200 OK** and updated policy decisions. The response includes any new or modified policy rules (e.g., confirm authorized QoS flow parameters or charging rules) that the SMF should enforce for the session."
+        },
+        {from: "SMF", to: "AMF", label: "5 Namf_Communication_N1N2MessageTransfer Request", info: {
+            header: {msg: "Namf_Communication_N1N2MessageTransfer Request", protocol: "HTTP (Namf Comm)"},
+            payload: {
+                "PDU Session ID [Mandatory]": "PDU session identifier for which the N1/N2 message is intended:contentReference[oaicite:8]{index=8}",
+                "N1 SM Container [Mandatory]": "NAS PDU Session Modification Command to be delivered to the UE (encoded 5GSM message):contentReference[oaicite:9]{index=9}",
+                "N2 SM Information [Mandatory]": "NGAP PDU Session Resource Modify Request to be sent to gNB (contains QoS flow setup info and NAS message):contentReference[oaicite:10]{index=10}",
+                "AllowStorage [Optional]": "Indicator if AMF should store the message if UE is unreachable (for CM-IDLE case)"
+            }
+        }, comment: "The SMF invokes the **Namf_Communication_N1N2MessageTransfer** service (N1/N2 message transfer) to deliver the PDU Session Modification Command to the UE:contentReference[oaicite:11]{index=11}. This HTTP POST to the AMF includes both the N1 SM Container (the NAS PDU Session Modification Command for the UE) and the N2 SM Information (the NGAP PDU Session Resource Modify Request for the RAN). The PDU Session ID is included so the AMF can route the message to the correct access and PDU session context:contentReference[oaicite:12]{index=12}. The AMF will forward these to the gNB."
+        },
+        {from: "AMF", to: "SMF", label: "6 Namf_Communication_N1N2MessageTransfer Response", info: {
+            header: {msg: "Namf_Communication_N1N2MessageTransfer Response", protocol: "HTTP"},
+            payload: {
+                "Result [Mandatory]": "Indicates AMF’s handling status (e.g., 202 Accepted if UE paging is initiated, or 200/204 if delivered immediately)"
+            }
+        }, comment: "The AMF returns an HTTP response to the SMF for the N1N2 transfer request. A successful response (e.g., **204 No Content** or **202 Accepted**) indicates the AMF has accepted the message for delivery to the UE. At this point, the AMF will proceed to send the NAS message to the UE via the gNB (and page the UE if it is not currently connected)."
+        },
+        {from: "AMF", to: "gNB", label: "7 N2 PDU Session Request", info: {
+            header: {msg: "PDU Session Resource Modify Request", protocol: "NGAP"},
+            payload: {
+                "AMF UE NGAP ID [Mandatory]": "UE identifier assigned by the AMF for this NGAP session",
+                "RAN UE NGAP ID [Mandatory]": "UE identifier used by the gNB (provided earlier during setup)",
+                "PDU Session Resource Modify List [Mandatory]": {
+                    "PDU Session ID [Mandatory]": "Identifier of the PDU session being modified",
+                    "NAS-PDU [Optional]": "NAS PDU Session Modification Command (carried transparently for the UE):contentReference[oaicite:13]{index=13}:contentReference[oaicite:14]{index=14}",
+                    "PDU Session Resource Modify Request Transfer [Mandatory]": "RAN-specific instructions for this modification (QoS Flow parameters, QoS profile, mapping of flows to DRB):contentReference[oaicite:15]{index=15}",
+                    "S-NSSAI [Optional]": "Single Network Slice Selection Assistance Information for this PDU session (if needed by gNB):contentReference[oaicite:16]{index=16}"
+                },
+                "RAN Paging Priority [Optional]": "Priority for this message if the UE needs paging (not used if UE is connected)"
+            }
+        }, comment: "The AMF sends an **NGAP PDU Session Resource Modify Request** to the gNB to initiate the QoS update on the radio side:contentReference[oaicite:17]{index=17}. This N2 message contains the PDU Session ID, the NAS PDU Session Modification Command (embedded as NAS-PDU), and the PDU Session Resource Modify Request Transfer IE with details for the gNB on how to configure the new QoS flow (GBR QoS parameters, etc.). The gNB uses this information to attempt to modify the radio bearers for the session."
+        },
+        {from: "gNB", to: "UE", label: "8 PDU Session Modification Command", info: {
+            header: {msg: "PDU Session Modification Command", protocol: "NAS (5GSM)"},
+            payload: {
+                "Extended Protocol Discriminator [Mandatory]": "Indicates 5G SM signaling message",
+                "PDU Session ID [Mandatory]": "Identifier of the PDU session being modified (same as in request)",
+                "Procedure Transaction ID [Mandatory]": "Transaction identifier for this NAS procedure",
+                "5GSM Cause [Optional]": "Cause code if network is indicating a specific reason for modification (usually absent for network-initiated command)",
+                "Session-AMBR [Conditional]": "Updated session aggregate bit rate limit, if it was modified by policy",
+                "RQ Timer Value [Conditional]": "Timer for UE to initiate release if QoS rule is not acknowledged (if provided by network):contentReference[oaicite:18]{index=18}",
+                "Always-on PDU Session Indication [Conditional]": "If set, indicates the PDU session is always-on and cannot be deactivated by the UE",
+                "Authorized QoS Rules [Conditional]": "List of QoS rules to install or update (each defines mapping of traffic filters to QoS Flow ID (QFI) and QoS parameters):contentReference[oaicite:19]{index=19}",
+                "Authorized QoS Flow Descriptions [Conditional]": "QoS descriptors for the QoS flows, containing detailed QoS characteristics (5QI, ARP, GBR, MBR, etc.):contentReference[oaicite:20]{index=20}",
+                "Mapped EPS Bearer Contexts [Conditional]": "Mapping information if any QoS flows are associated with EPS bearers (for interworking scenarios)",
+                "Extended Protocol Configuration Options [Optional]": "Container for additional parameters (e.g., DNS server address, PCO) if needed"
+            }
+        }, comment: "The gNB delivers the **PDU Session Modification Command** NAS message to the UE over the air interface. This NAS message instructs the UE to modify the PDU session (e.g., set up a new QoS flow) with the provided parameters. It includes any updated session parameters such as new QoS rules (with associated QFI and QoS profiles), updated session AMBR, etc., as determined by the policy update:contentReference[oaicite:21]{index=21}. Upon receiving this, the UE will configure its end of the QoS flow and respond with the outcome."
+        },
+        {from: "gNB", to: "AMF", label: "9 N2 PDU Session Ack", info: {
+            header: {msg: "PDU Session Resource Modify Response", protocol: "NGAP"},
+            payload: {
+                "AMF UE NGAP ID [Mandatory]": "AMF’s UE ID, as echoed from the request",
+                "RAN UE NGAP ID [Mandatory]": "gNB’s UE ID, as echoed from the request",
+                "PDU Session Resource Modify Response List [Optional]": {
+                    "PDU Session ID [Mandatory]": "Identifier of the PDU session modified",
+                    "PDU Session Resource Modify Response Transfer [Mandatory]": "RAN->AMF container with the result of the modification (e.g., accepted QoS flow, resource parameters):contentReference[oaicite:22]{index=22}:contentReference[oaicite:23]{index=23}"
+                },
+                "PDU Session Resource Failed to Modify List [Optional]": {
+                    "PDU Session ID [Mandatory]": "Identifier of any PDU session that failed modification",
+                    "PDU Session Resource Modify Unsuccessful Transfer [Mandatory]": "Container with failure cause if the QoS modification was not successful:contentReference[oaicite:24]{index=24}:contentReference[oaicite:25]{index=25}"
+                },
+                "User Location Information [Optional]": "UE’s location info (e.g., TAI, cell ID) at the time of response",
+                "Criticality Diagnostics [Optional]": "Indicates if any errors in received IEs were ignored or if there were issues in processing the request"
+            }
+        }, comment: "The gNB returns an **NGAP PDU Session Resource Modify Response** to the AMF, indicating the outcome of the radio bearer modification:contentReference[oaicite:26]{index=26}:contentReference[oaicite:27]{index=27}. If the QoS flow setup was successful, the response list contains the PDU Session ID and a success indication (and the gNB may provide associated QoS flow IDs or tunnel info if needed). If the gNB could not support the new QoS (e.g., lack of resources), it would include the session ID in the failed list with a cause for the failure. In our scenario (e.g., IMS voice QoS), a successful acknowledgement is expected."
+        },
+        {from: "UE", to: "gNB", label: "12 PDU Session Modification Complete", info: {
+            header: {msg: "PDU Session Modification Complete", protocol: "NAS (5GSM)"},
+            payload: {
+                "Extended Protocol Discriminator [Mandatory]": "5G SM signaling",
+                "PDU Session ID [Mandatory]": "Identifier of the PDU session modified",
+                "Procedure Transaction ID [Mandatory]": "Transaction ID matching the Command",
+                "5GSM Cause [Optional]": "Included if the UE rejects the modification (not present in Complete message)",
+                "Extended Protocol Configuration Options [Optional]": "If the network requested or provided PCO, the UE’s response PCO (e.g., acknowledging configuration) is included here"
+            }
+        }, comment: "The UE sends **PDU Session Modification Complete** to acknowledge successful activation of the requested session modification. This NAS message confirms that the UE has configured the new QoS flow (or other session changes). It contains the Procedure Transaction ID (to match the Command) and optional information (such as any protocol configuration options that the UE is returning). There is no 5GSM cause in a Complete (that is only present if the UE were to send a Reject instead)."
+        },
+        {from: "gNB", to: "AMF", label: "13 N2 Uplink NAS Transport", info: {
+            header: {msg: "Uplink NAS Transport", protocol: "NGAP"},
+            payload: {
+                "RAN UE NGAP ID [Mandatory]": "UE identifier in gNB (same as in previous messages)",
+                "AMF UE NGAP ID [Mandatory]": "UE identifier in AMF",
+                "NAS-PDU [Mandatory]": "NAS message from UE (PDU Session Modification Complete) carried in this uplink transport",
+                "User Location Information [Mandatory]": "UE’s current location info (TAI, cell ID) provided by gNB",
+                "Timestamp [Optional]": "Reception timestamp or frame number (if gNB provides it)"
+            }
+        }, comment: "The gNB forwards the UE’s NAS response to the AMF using an **Uplink NAS Transport** message. This NGAP message carries the PDU Session Modification Complete NAS PDU from the UE to the AMF:contentReference[oaicite:28]{index=28}:contentReference[oaicite:29]{index=29}. The AMF now knows the UE has successfully applied the session modification."
+        },
+        {from: "AMF", to: "SMF", label: "14 Nsmf_PDUSession_UpdateSMContext Request", info: {
+            header: {msg: "Nsmf_PDUSession_UpdateSMContext Request", protocol: "HTTP (Nsmf)"},
+            payload: {
+                "SUPI [Mandatory]": "Subscriber identifier for the UE (supplied to identify the context)",
+                "PDU Session ID [Mandatory]": "Identifier of the PDU session being updated",
+                "Operation Type [Optional]": "Indicates the reason for update (e.g., \"UP activate\" if new user plane resources were activated):contentReference[oaicite:30]{index=30}",
+                "N1 SM Container [Optional]": "NAS message from UE, if any, related to this update (e.g., the SM Complete or Reject):contentReference[oaicite:31]{index=31}",
+                "N2 SM Information [Optional]": "Any additional info from NGAP (not needed here, as no further RAN action required):contentReference[oaicite:32]{index=32}",
+                "UE Location Information [Optional]": "Current location of UE (from AMF)",
+                "UE Time Zone [Optional]": "UE’s time zone"
+            }
+        }, comment: "Upon receiving the UE’s response, the AMF informs the SMF of the outcome via **Nsmf_PDUSession_UpdateSMContext** (Update SM Context):contentReference[oaicite:33]{index=33}. The AMF’s HTTP POST includes the SUPI, the PDU Session ID, and the UE’s NAS container (e.g., the PDU Session Modification Complete) to let the SMF know that the modification succeeded. If the UE had rejected the change, the NAS container would carry the Reject and cause. The SMF uses this information to update its context and finalize the procedure."
+        },
+        {from: "SMF", to: "AMF", label: "15 Nsmf_PDUSession_UpdateSMContext Response", info: {
+            header: {msg: "Nsmf_PDUSession_UpdateSMContext Response", protocol: "HTTP"},
+            payload: {
+                "Result Indication [Mandatory]": "Outcome of the update (e.g., Success)",
+                "Cause [Optional]": "If the SMF cannot apply the update or error occurred (e.g., in case of UE rejection handling)",
+                "Released EPS Bearer(s) [Optional]": "Any EPS bearers or resources to release (if applicable)",
+                "Allocated EPS Bearer(s) [Optional]": "Details of any new EPS bearer mapping (if applicable for interworking)",
+                "N2 SM Information [Optional]": "If SMF needs AMF to send any further NGAP message (not used in this case)",
+                "N1 SM Container [Optional]": "If SMF needs AMF to send any further NAS message to UE (not used here)"
+            }
+        }, comment: "The SMF responds to the AMF’s UpdateSMContext request, confirming that it has updated the session context. In the typical successful case, the SMF returns a success result. If the UE had rejected the modification, the SMF’s response would still be success (the procedure completes, though no new QoS is active) or it may include a cause if some remedial action is needed. This response ensures the AMF that the SMF has processed the UE’s answer and the SMF’s context is in sync."
+        },
+        {from: "SMF", to: "UPF", label: "16 PFCP Session Modification Request", info: {
+            header: {msg: "PFCP Session Modification Request", protocol: "PFCP (N4)"},
+            payload: {
+                "PFCP Session ID (F-SEID) [Mandatory]": "Identifiers (SMF and UPF IDs) of the PFCP session to modify",
+                "Create PDR [Conditional]": "Instructions to add a new Packet Detection Rule for the new QoS flow (includes match filters and QFI):contentReference[oaicite:34]{index=34}",
+                "Create FAR [Conditional]": "Forwarding Action Rule for new PDR (e.g., routing to existing tunnel endpoint):contentReference[oaicite:35]{index=35}",
+                "Create QER [Conditional]": "QoS Enforcement Rule for new flow (e.g., GBR parameters enforcement):contentReference[oaicite:36]{index=36}",
+                "Update PDR/FAR/QER [Conditional]": "Modify existing rules if needed (e.g., adjust default bearer QoS):contentReference[oaicite:37]{index=37}",
+                "Remove PDR/FAR/QER [Conditional]": "Remove rules if no longer needed (not typically used in add QoS scenario):contentReference[oaicite:38]{index=38}",
+                "PFCPSMReq-Flags [Optional]": "Flags for special handling (e.g., QUERY URR, Dropped packet handling):contentReference[oaicite:39]{index=39}",
+                "Usage Reporting Triggers (URRs) [Optional]": "Usage report request for any relevant URR (e.g., to get interim usage for charging):contentReference[oaicite:40]{index=40}"
+            }
+        }, comment: "The SMF initiates a **PFCP Session Modification Request** towards the UPF (PDU Session Anchor) to install or update user plane rules for the new QoS flow:contentReference[oaicite:41]{index=41}. In this case, the SMF will add a new PDR (Packet Detection Rule) in the UPF for the dedicated QoS flow (matching the QoS flow’s traffic, e.g., by 5-tuple or QoS Flow Identifier) and associated FAR/QER for forwarding and QoS enforcement. The PFCP message may include multiple grouped IEs to add or update rules accordingly. This ensures the UPF can enforce the new QoS (e.g., ensuring GBR for voice traffic)."
+        },
+        {from: "UPF", to: "SMF", label: "17 PFCP Session Modification Response", info: {
+            header: {msg: "PFCP Session Modification Response", protocol: "PFCP (N4)"},
+            payload: {
+                "Cause [Mandatory]": "Indicates success or failure of the modification (e.g., Request accepted):contentReference[oaicite:42]{index=42}",
+                "Offending IE [Conditional]": "Included if the UPF rejects the request due to a malformed specific IE (identifies which IE):contentReference[oaicite:43]{index=43}",
+                "Created PDR [Optional]": "Confirmation of any new PDR ID that was successfully created",
+                "Created/Updated Traffic Endpoint [Optional]": "Information on new user-plane endpoint (e.g., if a new tunnel was created for this flow)",
+                "Usage Report [Optional]": "Usage report for any URR that triggered (volume/time used so far, if requested by SMF)",
+                "Failed Rule ID [Conditional]": "If the request failed to apply a specific rule, the ID of the rule that failed (e.g., if a QER could not be installed):contentReference[oaicite:44]{index=44}",
+                "Load Control Information [Optional]": "Indicates UPF load status if applicable",
+                "Overload Control Information [Optional]": "Indicates any overload control triggered"
+            }
+        }, comment: "The UPF responds with **PFCP Session Modification Response** to the SMF:contentReference[oaicite:45]{index=45}. A successful response (Cause = Request accepted) means the UPF has added/updated the necessary rules for the new QoS flow. If there were any issues (e.g., unknown IE or lack of resources), the Cause would indicate failure and an Offending IE may point to the problematic part. In normal conditions for a new QoS flow, the UPF should accept and start enforcing the new QoS rules. The response may also carry usage reports (if any URRs were configured and triggered) that the SMF can use for charging."
+        },
+        {from: "SMF", to: "PCF", label: "18 Npcf_SMPolicyControl_Update Request", info: {
+            header: {msg: "Npcf_SMPolicyControl_Update Request", protocol: "HTTP (N7 PCF-SMF)"},
+            payload: {
+                "Policy Association ID [Mandatory]": "Identifier of the policy association for this PDU session",
+                "Notification Information [Mandatory]": "Indication of session modification outcome (e.g., QoS flow successfully established or failed)",
+                "UE 5GSM Cause [Optional]": "If the modification was rejected by UE, the cause value (to inform policy decisions)"
+            }
+        }, comment: "After completing the user-plane update, the SMF notifies the PCF of the outcome of the PDU Session modification. This is done via an **Npcf_SMPolicyControl_Update** request (this time initiated by SMF) to report whether the QoS update was successfully activated. For example, if the UE had rejected the modification, the SMF would inform the PCF so that policy (e.g., QoS or charging) can be adjusted accordingly. In our scenario, the SMF indicates success, meaning the new QoS flow is active."
+        },
+        {from: "PCF", to: "SMF", label: "19 Npcf_SMPolicyControl_Update Response", info: {
+            header: {msg: "Npcf_SMPolicyControl_Update Response", protocol: "HTTP"},
+            payload: {
+                "HTTP Status [Mandatory]": "200 OK (or 204 No Content) – PCF successfully received the update outcome",
+                "Updated Policy [Optional]": "If needed, PCF may adjust policies (e.g., remove a PCC rule if UE rejected), otherwise no additional policy changes"
+            }
+        }, comment: "The PCF acknowledges the SMF’s update with a success response, concluding the policy control interaction for this procedure. The PCF now has the final state of the session (e.g., that the new QoS flow is in place), and can continue monitoring or charging as per the policy. No further action is required from the SMF from a policy perspective."
+        },
+        {from: "SMF", to: "CHF", label: "20 Charging Data Request (Update)", info: {
+            header: {msg: "Nchf_ConvergedCharging_Update Request", protocol: "HTTP (Nchf)"},
+            payload: {
+                "Charging Session ID [Mandatory]": "Identifier of the charging session (assigned during session start)",
+                "Update Trigger [Mandatory]": "Indicates reason for interim update (e.g., new QoS flow activation, periodic timer)",
+                "Usage Data Report [Optional]": "Usage counters since last report (e.g., data volume, duration) if applicable",
+                "Trigger Timestamp [Optional]": "Time of this usage report",
+                "Rating Group / Service ID [Optional]": "Identifier of the service/QoS flow for differentiated charging (if applicable)"
+            }
+        }, comment: "The SMF (acting as a Charging Trigger Function) sends a **Charging Data Request [Update]** to the CHF (Charging Function) to report mid-session usage or events:contentReference[oaicite:46]{index=46}. In this case, the establishment of a new QoS flow (for IMS voice) might trigger an interim charging report (for example, to start separate charging for the voice QoS flow). The request is sent via the Nchf_ConvergedCharging service and includes the charging session ID and any updated usage data or event triggers since the last report. This message allows the CHF to update the ongoing CDR (charging data record) for this session."
+        },
+        {from: "CHF", to: "SMF", label: "21 Charging Data Response (Update)", info: {
+            header: {msg: "Nchf_ConvergedCharging_Update Response", protocol: "HTTP"},
+            payload: {
+                "Charging Result [Mandatory]": "Result of processing the update (e.g., Update CDR successful):contentReference[oaicite:47]{index=47}",
+                "Granted Units/Quota [Optional]": "If online charging with quota, updated quota info (not applicable for offline interim update)",
+                "Policy Control Feedback [Optional]": "Any instructions from CHF (rare for update, typically none)"
+            }
+        }, comment: "The CHF processes the interim update and replies with **Charging Data Response [Update]**:contentReference[oaicite:48]{index=48}. This response confirms that the charging data was successfully received (and the CDR updated). In an offline charging scenario, this is typically an acknowledgment with no additional quotas. In an online charging scenario (if it were one), the response could include updated quotas or credit. Here it mainly signals that the charging record has been updated."
+        },
+        {from: "SMF", to: "RADIUS", label: "22 Accounting-Request (Interim-Update)", info: {
+            header: {msg: "RADIUS Accounting-Request (Interim-Update)", protocol: "RADIUS"},
+            payload: {
+                "Acct-Status-Type [Mandatory]": "Interim-Update (value=3) – indicating this is a periodic/updates report:contentReference[oaicite:49]{index=49}",
+                "User-Name [Mandatory]": "Identifier of the subscriber (e.g., IMSI) for correlation",
+                "Acct-Session-Id [Mandatory]": "Accounting session ID to tie records to the session (as assigned at start)",
+                "Framed-IP-Address [Optional]": "UE’s IP address (if included for context in records)",
+                "Acct-Session-Time [Optional]": "Elapsed session time (in seconds) reported at this point",
+                "Acct-Input-Octets/Output-Octets [Optional]": "Uplink/downlink data volume used so far (for volume reporting)",
+                "3GPP-Charging-Id [Optional]": "Charging identifier for this session (if used, as per 3GPP RADIUS attributes)",
+                "3GPP-IMSI [Optional]": "IMSI of the user (if not using User-Name for IMSI)"
+            }
+        }, comment: "In addition to the 5G CHF interface, the SMF sends a RADIUS **Accounting-Request (Interim-Update)** message to a RADIUS/Diameter based charging system (for example, in a roaming or interworking scenario where RADIUS is used for accounting):contentReference[oaicite:50]{index=50}. This interim update contains cumulative usage data and is identified by Acct-Status-Type = Interim-Update. It includes the session identifiers and updated usage (time, octets) since the last report. This allows an external AAA/charging server to maintain an up-to-date accounting of the session."
+        },
+        {from: "RADIUS", to: "SMF", label: "23 Accounting-Response (Interim-Update)", info: {
+            header: {msg: "RADIUS Accounting-Response", protocol: "RADIUS"},
+            payload: {
+                "Result Code [Mandatory]": "Indication that the interim update was received (e.g., Accounting-Response with no errors)",
+                "Reply-Message AVP [Optional]": "Optional text message from the server (if any)",
+                "Balance/Quota AVPs [Optional]": "Optional information if the AAA is also tracking quotas (not typical for pure accounting)"
+            }
+        }, comment: "The RADIUS accounting server responds with an **Accounting-Response** to confirm receipt of the interim update:contentReference[oaicite:51]{index=51}. Typically, this response contains no additional attributes if processing was successful. It essentially acknowledges the update so that the SMF knows the record was accounted for. This completes the interim accounting cycle. \n\n**End of Network-Initiated PDU Session Modification Procedure** – At this point, the dedicated QoS flow has been established and all network functions (SMF, PCF, charging) have been updated accordingly as per **3GPP Release 18** specifications:contentReference[oaicite:52]{index=52}:contentReference[oaicite:53]{index=53}."
+        }
+    ];
+
+      /* ====== 页面元素 ====== */
+      const headerInner=document.getElementById('header-names-inner');
+      const bodyDiv=document.getElementById('diagram-body');
+      const svg=document.getElementById('diagram');
+      const diagramContainer=document.getElementById('diagram-container');
+      const verticalDivider=document.getElementById('vertical-divider');
+      const viewerWrapper=document.getElementById('viewer-wrapper');
+
+      const rightDetail=document.getElementById('right-detail');
+      const jsonViewer=document.getElementById('json-viewer');
+      const commentViewer=document.getElementById('comment-viewer');
+      const commentContent=document.getElementById('comment-content');
+      const hDivider=document.getElementById('horizontal-divider');
+
+      /* ====== 绘制信令图 ====== */
+      const headerHeight=50;
+      const margin={top:headerHeight,bottom:50,left:100,right:100};
+      const xStep=200,msgSpacing=80;
+      const totalHeight=margin.top+msgSpacing*(messages.length+1)+margin.bottom;
+      const totalWidth=margin.left+xStep*(nodes.length-1)+margin.right;
+      svg.setAttribute('width',totalWidth);
+      svg.setAttribute('height',totalHeight);
+      headerInner.style.width=totalWidth+'px';
+
+      /* X 坐标 */
+      const xs={};
+      nodes.forEach((n,i)=>{
+        const x=margin.left+i*xStep;
+        xs[n]=x;
+        const d=document.createElement('div');
+        d.className='node-name';
+        d.textContent=n;
+        d.style.left=x+'px';
+        headerInner.appendChild(d);
+        const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1',x);line.setAttribute('y1',margin.top);
+        line.setAttribute('x2',x);line.setAttribute('y2',totalHeight-margin.bottom);
+        line.setAttribute('stroke','#aaa');line.setAttribute('stroke-dasharray','4 2');
+        svg.appendChild(line);
+      });
+
+      /* 箭头 marker */
+      const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+      const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+      marker.setAttribute('id','arrow');marker.setAttribute('markerWidth','8');marker.setAttribute('markerHeight','8');
+      marker.setAttribute('refX','6');marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+      const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d','M0,0 L0,6 L6,3 Z');path.setAttribute('fill','#000');
+      marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+
+      /* 渲染消息线条和标签 */
+      messages.forEach((m,i)=>{
+        const y=margin.top+msgSpacing*(i+1);
+        const x1=xs[m.from],x2=xs[m.to];
+        const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1',x1);ln.setAttribute('y1',y);
+        ln.setAttribute('x2',x2);ln.setAttribute('y2',y);
+        ln.setAttribute('stroke','#000');ln.setAttribute('marker-end','url(#arrow)');
+        svg.appendChild(ln);
+        const lbl=document.createElementNS('http://www.w3.org/2000/svg','text');
+        lbl.setAttribute('x',(x1+x2)/2);lbl.setAttribute('y',y-6);
+        lbl.setAttribute('text-anchor','middle');lbl.classList.add('message-label');
+        lbl.textContent=m.label;
+        lbl.addEventListener('click',()=>{
+          renderJSON(m.info,jsonViewer);
+          commentContent.innerHTML=marked.parse(m.comment);
+        });
+        svg.appendChild(lbl);
+      });
+
+      /* ====== JSON 渲染函数 ====== */
+      function renderJSON(obj,container){
+        container.innerHTML='';
+        function walk(k,v,parent){
+          if(v&&typeof v==='object'){
+            const d=document.createElement('details');d.open=true;
+            const s=document.createElement('summary');s.textContent=k;d.appendChild(s);
+            for(const kk in v)walk(kk,v[kk],d);
+            parent.appendChild(d);
+          }else{
+            const div=document.createElement('div');
+            div.textContent=k+': '+v;parent.appendChild(div);
+          }
+        }
+        for(const key in obj)walk(key,obj[key],container);
+      }
+
+      
+      /* ====== 同步水平滚动，保持节点标题与竖线对齐 ===== */
+      bodyDiv.addEventListener('scroll', () => {
+        headerInner.style.transform = `translateX(${-bodyDiv.scrollLeft}px)`;
+      });
+      /* 初始化一次，避免刚加载时错位 */
+      headerInner.style.transform = 'translateX(0px)';
+      /* ====== 右侧面板拖拽 ===== */
+      verticalDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startX=e.clientX,startW=viewerWrapper.offsetWidth;
+        function onMove(ev){viewerWrapper.style.width=(startW-(ev.clientX-startX))+'px';}
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      function initVertical(){const h=rightDetail.clientHeight/2;jsonViewer.style.top='0';jsonViewer.style.height=h+'px';hDivider.style.top=h+'px';commentViewer.style.top=(h+5)+'px';commentViewer.style.height=(h-5)+'px';}
+      initVertical();window.addEventListener('resize',initVertical);
+      hDivider.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const startY=e.clientY,startH=jsonViewer.offsetHeight;
+        function onMove(ev){
+          const newH=startH+(ev.clientY-startY);
+          jsonViewer.style.height=newH+'px';hDivider.style.top=newH+'px';
+          commentViewer.style.top=(newH+5)+'px';commentViewer.style.height=(rightDetail.clientHeight-newH-5)+'px';
+        }
+        function stop(){document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',stop);}
+        document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',stop);
+      });
+
+      /* ====== 缩放与平移 ===== */
+      const originalW=totalWidth,originalH=totalHeight;let scale=1;
+      svg.setAttribute('viewBox',`0 0 ${originalW} ${originalH}`);
+
+      /* 拖拽平移（保持功能，不改变指针样式） */
+      let dragging=false,sx=0,sy=0;
+      diagramContainer.addEventListener('mousedown',e=>{
+        dragging=true;sx=e.clientX;sy=e.clientY;e.preventDefault();});
+      document.addEventListener('mousemove',e=>{
+        if(!dragging) return;
+        diagramContainer.scrollLeft-=e.clientX-sx;
+        diagramContainer.scrollTop -=e.clientY-sy;
+        sx=e.clientX;sy=e.clientY;
+      });
+      document.addEventListener('mouseup',()=>{dragging=false;});
+
+      /* 缩放 */
+      diagramContainer.addEventListener('wheel',e=>{
+        if(!e.ctrlKey)return;
+        e.preventDefault();
+        const factor=(Math.abs(e.deltaY)<50)?(e.deltaY<0?1.05:0.95):(e.deltaY<0?1.2:0.8);
+        const newScale=scale*factor;if(newScale<0.1||newScale>10)return;
+        const rect=diagramContainer.getBoundingClientRect();
+        const cx=e.clientX-rect.left,cy=e.clientY-rect.top;
+        const contentX=(diagramContainer.scrollLeft+cx)/scale;
+        const contentY=(diagramContainer.scrollTop+cy)/scale;
+        scale=newScale;
+        svg.setAttribute('width',originalW*scale);svg.setAttribute('height',originalH*scale);
+        headerInner.style.width=(originalW*scale)+'px';
+        nodes.forEach((n,i)=>{headerInner.children[i].style.left=((margin.left+i*xStep)*scale)+'px';});
+        diagramContainer.scrollLeft=contentX*scale-cx;
+        diagramContainer.scrollTop =contentY*scale-cy;
+      },{passive:false});
+    });
+  </script>
+
+  <script id="addon-script">
+    document.addEventListener('DOMContentLoaded', function(){
+      const labels = Array.from(document.querySelectorAll('.message-label'));
+      let currentIdx = -1;
+      const select = (idx, viaKey=false) => {
+        if(idx < 0 || idx >= labels.length) return;
+        if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+        currentIdx = idx;
+        const lbl = labels[currentIdx];
+        lbl.classList.add('selected');
+        if(viaKey) {
+          lbl.scrollIntoView({block:'center', inline:'center'});
+        }
+        lbl.dispatchEvent(new Event('click'));
+      };
+      labels.forEach((lbl, idx) => {
+        lbl.addEventListener('click', () => {
+          if(currentIdx >= 0) labels[currentIdx].classList.remove('selected');
+          currentIdx = idx;
+          lbl.classList.add('selected');
+        });
+      });
+      document.addEventListener('keydown', (e) => {
+        if(e.key === 'ArrowDown'){
+          e.preventDefault();
+          select(currentIdx + 1, true);
+        } else if(e.key === 'ArrowUp'){
+          e.preventDefault();
+          select(currentIdx - 1, true);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
